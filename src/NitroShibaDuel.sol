@@ -504,9 +504,13 @@ contract NitroShibaDuel is Ownable {
             
             // Return staked NFT
             IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+            // Clear staking record
+            duels[_duelID].nftPayout = 0;
         } else {
             // If the winner was the previous winner, transfer the loser's NFT to them
             IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+            // Clear staking record
+            duels[_duelID].nftPayout = 0;
         }
     }
 
@@ -556,29 +560,7 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Internal DoubleOrNothing mode logic
-    function _doubleOrNothing(uint256 _duelID, uint256 _tokenId) internal {
-        // If Allow only winner and loser to run logic
-        // If not winner, then loser only
-        if (_confirmWinner(_duelID) == msg.sender) {
-            // Set DoubleOrNothing switch to true
-            duels[_duelID].DONSwitch[msg.sender] = true;
-        } else {
-            // Non losers will experience an error here
-            _confirmLoser(_duelID);
-
-            // Confirm NFT ownership and approval are still good
-            _confirmNFT(msg.sender, _tokenId);
-
-            // Stake NFT into contract
-            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
-            duels[_duelID].nftPayout = _tokenId;
-
-            // Set DoubleOrNothing switch to true
-            duels[_duelID].DONSwitch[msg.sender] = true;
-        }
-
-        emit DuelDONSwitched(msg.sender, _duelID);
-
+    function _doubleOrNothing(uint256 _duelID) internal {
         // Check if DON can be enabled (true if both have flipped DONSwitch)
         bool enabled = _enableDON(_duelID);
 
@@ -849,6 +831,35 @@ contract NitroShibaDuel is Ownable {
         winner = _executeDuel(_duelID);
 
         return winner;
+    }
+
+    // Allow loser to stake ANY owned NitroShiba NFT as their DoubleOrNothing NFT wager
+    // Designed to allow multiple runs of DoubleOrNothing
+    function doubleOrNothingDuel(uint256 _duelID, uint256 _tokenId) public {
+        // If Allow only winner and loser to run logic
+        // If not winner, then loser only
+        if (_confirmWinner(_duelID) == msg.sender) {
+            // Set DoubleOrNothing switch to true
+            duels[_duelID].DONSwitch[msg.sender] = true;
+        } else {
+            // Non losers will experience an error here
+            _confirmLoser(_duelID);
+
+            // Confirm NFT ownership and approval are still good
+            _confirmNFT(msg.sender, _tokenId);
+
+            // Stake NFT into contract
+            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
+            duels[_duelID].nftPayout = _tokenId;
+
+            // Set DoubleOrNothing switch to true
+            duels[_duelID].DONSwitch[msg.sender] = true;
+        }
+
+        emit DuelDONSwitched(msg.sender, _duelID);
+
+        // Call remaining DoubleOrNothing logic
+        _doubleOrNothing(_duelID);
     }
 
     // Public function to allow duel winner to withdraw pot
