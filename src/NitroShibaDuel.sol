@@ -33,6 +33,7 @@ contract NitroShibaDuel is Ownable {
     error NoSalt(uint256 duelID);
 
     error InvalidStatus(uint256 duelID, Status current);
+    error InvalidMode(uint256 duelID, Mode mode);
     error DuelDeadline(uint256 duelID, uint256 timestamp, uint256 deadline);
     error ImproperJackpotInitialization();
     error BetBelowThreshold(uint256 bet, uint256 threshold);
@@ -371,7 +372,7 @@ contract NitroShibaDuel is Ownable {
     }
 
     /*//////////////////////////////////////////////////////////////
-                INTERNAL DUEL FUNCTIONS
+                GENERAL INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
     // Internal token transfer logic
@@ -395,6 +396,26 @@ contract NitroShibaDuel is Ownable {
         return success;
     }
 
+    // Internal function to reduce loser's $NISHIB contract balance
+    function _adjustBalances(uint256 _duelID) internal {
+        // Retrieve winner address and bet amount
+        address winner = duels[_duelID].winner;
+        uint256 bet = duels[_duelID].bet;
+
+        // Loop through all participants and transfer their bet from their balance to winner
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // Store loser address for cleaner code
+            address loser = duels[_duelID].addresses[i];
+            
+            // Only process balance changes for losers
+            if (loser != winner) {
+                // Reduce loser's contract balance and transfer to winner
+                nishibBalances[loser] -= bet;
+                nishibBalances[winner] += bet;
+            }
+        }
+    }
+
     // Internal sorting logic to determine winner
     function _determineWinner(uint256 _duelID) internal view returns (address winner) {
         // Store winning index value and vrfOutput for loop iterations
@@ -415,6 +436,43 @@ contract NitroShibaDuel is Ownable {
 
         return winner;
     }
+
+    /*//////////////////////////////////////////////////////////////
+                GAME MODE LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    // Internal function to process different game mode logic
+    function _executeGame(uint256 _duelID) internal {
+        // Retrireve duel game mode
+        Mode gameMode = duels[_duelID].mode;
+
+        // Execute logic specific to game mode
+        if (gameMode == Mode.SimpleBet) { // SimpleBet
+            _adjustBalances(_duelID);
+        }
+        else if (gameMode == Mode.DoubleOrNothing) { // DoubleOrNothing
+            
+        }
+        else if (gameMode == Mode.PVP) { // PVP
+
+        }
+        else if (gameMode == Mode.PVPPlus) { // PVPPlus
+
+        }
+        else if (gameMode == Mode.Jackpot) { // PVPPlus
+
+        }
+        else {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: gameMode
+            });
+        }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                DUEL-SPECIFIC INTERNAL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
     // Internal duel initialization logic
     // Cannot be used to initialize Jackpot duels
@@ -515,6 +573,9 @@ contract NitroShibaDuel is Ownable {
         // Set winning address in Duel data
         duels[_duelID].winner = winner;
 
+        // Process specific game mode logic
+        _executeGame(_duelID);
+
         emit DuelExecuted({
             executor: msg.sender,
             winner: winner,
@@ -528,8 +589,20 @@ contract NitroShibaDuel is Ownable {
         // Retrieve pot
         uint256 pot = duels[_duelID].tokenPayout;
 
+        // Validate that _recipient is entitled to pot
+        if (nishibBalances[_recipient] < pot) {
+            revert InsufficientBalance({
+                sender: address(this),
+                required: pot,
+                balance: nishibBalances[_recipient]
+            });
+        }
+
         // Process withdrawal logic
         success = _transferToken(address(this), _recipient, pot);
+
+        // Update contract token balance
+        nishibBalances[_recipient] -= pot;
 
         // Update Duel Status
         duels[_duelID].status = Status.PotPaid;
