@@ -91,7 +91,9 @@ contract NitroShibaDuel is Ownable {
                 IERC721Receiver
     //////////////////////////////////////////////////////////////*/
 
-    function _checkOnERC721Received(
+    // Is this really needed? Unsure. Keeping code until I am.
+
+    /* function _checkOnERC721Received(
         address _from,
         address _to,
         uint256 _tokenId,
@@ -118,7 +120,7 @@ contract NitroShibaDuel is Ownable {
         } else {
             return true;
         }
-    }
+    } */
 
     /*//////////////////////////////////////////////////////////////
                 MANAGEMENT FUNCTIONS
