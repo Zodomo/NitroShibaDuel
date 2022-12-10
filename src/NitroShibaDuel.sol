@@ -160,7 +160,7 @@ contract NitroShibaDuel is Ownable {
         // Ownership check
         if (IERC721(nishibNFT).ownerOf(_tokenId) != _sender) {
             revert NotOwner({
-                sender: msg.sender,
+                sender: _sender,
                 owner: IERC721(nishibNFT).ownerOf(_tokenId),
                 tokenId: _tokenId
             });
@@ -260,10 +260,23 @@ contract NitroShibaDuel is Ownable {
         return _duelID;
     }
 
-    // TODO: Cancelation logic
+    // Internal duel cancelation logic
     function _cancelDuel(uint256 _duelID) internal returns (bool success) {
+        // Store initiator address so we can use it after destroying data if needed
         address initiator = duels[_duelID].addresses[0];
-        // Cancelation logic
+
+        // Loop to process withdrawals for all potential parties
+        for (uint i = 0; i < duels[_duelID].addresses.length; i++) {
+            // Retrieve refundee address and refund value
+            address refundee = duels[_duelID].addresses[i];
+            uint256 refund = duels[_duelID].bet;
+
+            // Reduce user's stored contract balance
+            nishibBalances[refundee] -= refund;
+
+            // Process refund
+            _transferToken(address(this), refundee, refund);
+        }
 
         emit DuelCanceled(initiator, _duelID);
 
