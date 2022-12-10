@@ -28,6 +28,7 @@ contract NitroShibaDuel is Ownable {
     error NotInitiator(address sender, address initiator, uint256 duelID);
     error NotParticipant(address candidate, uint256 duelID);
     error NotWinner(address sender, address winner, uint256 duelID);
+    error NotLoser(address sender, uint256 duelID);
     error NotEnoughParticipants(uint256 duelID);
     error NoWinner(uint256 duelID);
     error NoSalt(uint256 duelID);
@@ -48,8 +49,10 @@ contract NitroShibaDuel is Ownable {
     event DuelInitiated(address indexed initiator, uint256 indexed duelID);
     event DuelCanceled(address indexed initiator, uint256 indexed duelID);
     event DuelExecuted(address indexed executor, address indexed winner, uint256 duelID);
-    event DuelPotWithdrawn(address indexed recipient, uint256 indexed duelID, uint256 indexed pot);
     event DuelSaltGenerated(uint256 duelID, bytes32 vrfSalt);
+    event DuelDONSwitched(address indexed participant, uint256 duelID);
+    event DuelDONEnabled(uint256 duelID);
+    event DuelPotWithdrawn(address indexed recipient, uint256 indexed duelID, uint256 indexed pot);
 
     event TokenTransfer(address indexed from, address indexed to, uint256 indexed amount);
     event NFTTransfer(address indexed from, address indexed to, uint256 indexed tokenId);
@@ -104,11 +107,13 @@ contract NitroShibaDuel is Ownable {
         uint256 deadline; // Duel deadline timestamp
         bytes32[] vrfInput; // Initial VRF bytes32 input per player
         bytes32 vrfSalt; // VRF salt calculated from hash of all vrfInputs
+        bytes32 vrfDONSalt;
         uint256[] vrfOutput; // Output VRF numbers calculated from hash of player vrfInput + vrfSalt
         address winner; // Winner address
+        mapping(address => bool) DONSwitch; // DoubleOrNothing switch, both users need to set to true
         uint256 participantCount; // Count of participants
         uint256 tokenPayout; // Total $NISHIB payout
-        uint256 nftPayout; // NFT payout, if any
+        uint256 nftPayout; // tokenId of NFT payout, if any
     }
     // uint256 count as duel identifier to Duel struct
     mapping(uint256 => Duel) public duels;
@@ -275,6 +280,23 @@ contract NitroShibaDuel is Ownable {
             });
         }
     }
+
+    // Confirm the caller is a valid participant but lost
+    function _confirmLoser(uint256 _duelID) internal view returns (bool) {
+        // Loop through all Duel participant addresses
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            if (duels[_duelID].winner != msg.sender &&
+                duels[_duelID].addresses[i] == msg.sender) {
+                    return true;
+            }
+        }
+
+        // If a valid loser didn't call, throw error
+        revert NotLoser({
+            sender: msg.sender,
+            duelID: _duelID
+        });
+    }
     
     // Confirm the caller is the duel winner
     function _confirmWinner(uint256 _duelID) internal view returns (address winner) {
@@ -345,6 +367,25 @@ contract NitroShibaDuel is Ownable {
         return vrfSalt;
     }
 
+    // Utilize vrfOutput as new input for DoubleOrNothing resalting
+    function _vrfGenerateDONSalt(uint256 _duelID) internal returns (bytes32 vrfDONSalt) {
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            vrfDONSalt = keccak256(abi.encodePacked(
+                vrfDONSalt,
+                duels[_duelID].vrfSalt,
+                duels[_duelID].vrfInput[i],
+                duels[_duelID].vrfOutput[i],
+                block.number,
+                block.timestamp,
+                block.difficulty
+            ));
+        }
+
+        emit DuelSaltGenerated(_duelID, vrfDONSalt);
+
+        return vrfDONSalt;
+    }
+
     // Generate final VRF hash output converted to uint256 for each user
     function _vrfGenerateOutputs(uint256 _duelID) internal {
         // Confirm duel vrfSalt was created
@@ -352,22 +393,44 @@ contract NitroShibaDuel is Ownable {
             revert NoSalt({ duelID: _duelID });
         }
 
-        // Calculate all participants' vrfOutputs
-        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
-            // Hash vrfSalt hash with vrfInput hash
-            bytes32 saltedOutput = keccak256(abi.encodePacked(
-                duels[_duelID].vrfSalt,
-                duels[_duelID].vrfInput[i],
-                block.number,
-                block.timestamp,
-                block.difficulty
-            ));
-            
-            // Cast saltedOutput to uint256 number
-            uint256 saltedNum = uint256(saltedOutput);
+        // If vrfDONSalt is present, overwrite vrfOutput with new DONSalted outputs
+        if (duels[_duelID].vrfDONSalt != bytes32(0)) {
+            for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+                // Hash vrfSalt hash with vrfInput hash
+                bytes32 saltedOutput = keccak256(abi.encodePacked(
+                    duels[_duelID].vrfSalt,
+                    duels[_duelID].vrfDONSalt,
+                    duels[_duelID].vrfInput[i],
+                    duels[_duelID].vrfOutput[i],
+                    block.number,
+                    block.timestamp,
+                    block.difficulty
+                ));
 
-            // Store vrfOutput
-            duels[_duelID].vrfOutput.push(saltedNum);
+                // Cast saltedOutput to uint256 number
+                uint256 saltedNum = uint256(saltedOutput);
+
+                // Overwrite vrfOutput
+                duels[_duelID].vrfOutput[i] = saltedNum;
+            }
+        } else {
+            // Calculate all participants' vrfOutputs
+            for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+                // Hash vrfSalt hash with vrfInput hash
+                bytes32 saltedOutput = keccak256(abi.encodePacked(
+                    duels[_duelID].vrfSalt,
+                    duels[_duelID].vrfInput[i],
+                    block.number,
+                    block.timestamp,
+                    block.difficulty
+                ));
+                
+                // Cast saltedOutput to uint256 number
+                uint256 saltedNum = uint256(saltedOutput);
+
+                // Store vrfOutput
+                duels[_duelID].vrfOutput.push(saltedNum);
+            }
         }
     }
 
@@ -398,7 +461,7 @@ contract NitroShibaDuel is Ownable {
 
     // Internal function to reduce loser's $NISHIB contract balance
     function _adjustBalances(uint256 _duelID) internal {
-        // Retrieve winner address and bet amount
+        // Retrieve winner address and bet amount for code clarity
         address winner = duels[_duelID].winner;
         uint256 bet = duels[_duelID].bet;
 
@@ -413,6 +476,37 @@ contract NitroShibaDuel is Ownable {
                 nishibBalances[loser] -= bet;
                 nishibBalances[winner] += bet;
             }
+        }
+    }
+
+    // Internal function to handle DoubleOrNothing asset transfer rules
+    function _adjustDONBalances(uint256 _duelID) internal {
+        // Retrieve winner address, total pot, and staked NFT tokenId for code clarity
+        address winner = duels[_duelID].winner;
+        uint256 pot = duels[_duelID].tokenPayout;
+        uint256 tokenId = duels[_duelID].nftPayout;
+        // Instantiate loser address for use later
+        address loser;
+
+        // Loop through all participants to find loser
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            if (duels[_duelID].addresses[i] != winner) {
+                // If loser, save their address
+                loser = duels[_duelID].addresses[i];
+            }
+        }
+
+        // If winner was the NFT staker, award them the balance and return their NFT
+        if (IERC721(nishibNFT).ownerOf(tokenId) == winner) {
+            // Adjust user staked token balances
+            nishibBalances[loser] -= pot;
+            nishibBalances[winner] += pot;
+            
+            // Return staked NFT
+            IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+        } else {
+            // If the winner was the previous winner, transfer the loser's NFT to them
+            IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
         }
     }
 
@@ -441,6 +535,61 @@ contract NitroShibaDuel is Ownable {
                 GAME MODE LOGIC
     //////////////////////////////////////////////////////////////*/
 
+    // Internal function logic for enabling the DoubleOrNothing Mode
+    function _enableDON(uint256 _duelID) internal returns (bool) {
+        // If both parties have enabled DONSwitch, enable DON mode
+        if (duels[_duelID].DONSwitch[duels[_duelID].addresses[0]] == true &&
+            duels[_duelID].DONSwitch[duels[_duelID].addresses[1]] == true) {
+                // Enable DoubleOrNothing Mode
+                duels[_duelID].mode = Mode.DoubleOrNothing;
+
+                emit DuelDONEnabled(_duelID);
+
+                // Generate vrfDONSalt
+                _vrfGenerateDONSalt(_duelID);
+
+                return true;
+            }
+        else {
+            return false;
+        }
+    }
+
+    // Internal DoubleOrNothing mode logic
+    function _doubleOrNothing(uint256 _duelID, uint256 _tokenId) internal {
+        // If Allow only winner and loser to run logic
+        // If not winner, then loser only
+        if (_confirmWinner(_duelID) == msg.sender) {
+            // Set DoubleOrNothing switch to true
+            duels[_duelID].DONSwitch[msg.sender] = true;
+        } else {
+            // Non losers will experience an error here
+            _confirmLoser(_duelID);
+
+            // Confirm NFT ownership and approval are still good
+            _confirmNFT(msg.sender, _tokenId);
+
+            // Stake NFT into contract
+            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
+            duels[_duelID].nftPayout = _tokenId;
+
+            // Set DoubleOrNothing switch to true
+            duels[_duelID].DONSwitch[msg.sender] = true;
+        }
+
+        emit DuelDONSwitched(msg.sender, _duelID);
+
+        // Check if DON can be enabled (true if both have flipped DONSwitch)
+        bool enabled = _enableDON(_duelID);
+
+        if (enabled) {
+            // Rerun full duel execution with DON Mode enabled
+            // New VRF values will be generated during salting process
+            _executeDuel(_duelID);
+        }
+    }
+
+
     // Internal function to process different game mode logic
     function _executeGame(uint256 _duelID) internal {
         // Retrireve duel game mode
@@ -451,7 +600,7 @@ contract NitroShibaDuel is Ownable {
             _adjustBalances(_duelID);
         }
         else if (gameMode == Mode.DoubleOrNothing) { // DoubleOrNothing
-            
+            _adjustDONBalances(_duelID);
         }
         else if (gameMode == Mode.PVP) { // PVP
 
@@ -468,6 +617,13 @@ contract NitroShibaDuel is Ownable {
                 mode: gameMode
             });
         }
+
+        // If no revert, announce Duel execution
+        emit DuelExecuted({
+            executor: msg.sender,
+            winner: duels[_duelID].winner,
+            duelID: _duelID
+        });
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -561,10 +717,13 @@ contract NitroShibaDuel is Ownable {
 
     // Internal duel execution logic
     function _executeDuel(uint256 _duelID) internal returns (address winner) {
-        // Generate vrfSalt
-        duels[_duelID].vrfSalt = _vrfGenerateSalt(_duelID);
+        // Don't regenerate vrfSalt if vrfDONSalt is present
+        if (duels[_duelID].vrfSalt == bytes32(0)) {
+            // Generate vrfSalt
+            duels[_duelID].vrfSalt = _vrfGenerateSalt(_duelID);
+        }
 
-        // Now that vrfSalt is generated, generate everyone's vrfOutputs
+        // Now that vrfSalt or vrfDONSalt is generated, generate everyone's vrfOutputs
         _vrfGenerateOutputs(_duelID);
 
         // Determine winner
@@ -576,11 +735,8 @@ contract NitroShibaDuel is Ownable {
         // Process specific game mode logic
         _executeGame(_duelID);
 
-        emit DuelExecuted({
-            executor: msg.sender,
-            winner: winner,
-            duelID: _duelID
-        });
+        // Set Duel Status to Completed
+        duels[_duelID].status = Status.Completed;
 
         return winner;
     }
@@ -601,7 +757,7 @@ contract NitroShibaDuel is Ownable {
         // Process withdrawal logic
         success = _transferToken(address(this), _recipient, pot);
 
-        // Update contract token balance
+        // Update user staked token balance
         nishibBalances[_recipient] -= pot;
 
         // Update Duel Status
@@ -611,6 +767,9 @@ contract NitroShibaDuel is Ownable {
 
         // Increment total payout via pot
         Counters.increment(totalPayout);
+
+        // Adjust Duel tokenPayout to avoid double withdraws
+        duels[_duelID].tokenPayout -= pot;
 
         return success;
     }
@@ -660,6 +819,14 @@ contract NitroShibaDuel is Ownable {
 
     // Public function allowing anyone to execute game logic and engage VRF logic
     function executeDuel(uint256 _duelID) public returns (address winner) {
+        // Confirm Duel Status is not Completed
+        if (duels[_duelID].status == Status.Completed) {
+            revert InvalidStatus({
+                duelID: _duelID,
+                current: duels[_duelID].status
+            });
+        }
+
         // Require at least two participants as that is minimum edge case
         if (duels[_duelID].participantCount > 1) {
             revert NotEnoughParticipants({ duelID: _duelID });
