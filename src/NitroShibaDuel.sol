@@ -32,7 +32,7 @@ contract NitroShibaDuel is Ownable {
     error NoWinner(uint256 duelID);
     error NoSalt(uint256 duelID);
 
-    error DuelStatus(uint256 duelID, Status status);
+    error InvalidStatus(uint256 duelID, Status current);
     error DuelDeadline(uint256 duelID, uint256 timestamp, uint256 deadline);
     error ImproperJackpotInitialization();
     error BetBelowThreshold(uint256 bet, uint256 threshold);
@@ -82,11 +82,13 @@ contract NitroShibaDuel is Ownable {
         PVPPlus,
         Jackpot
     }
+
     // Status enum determines duel status
     enum Status {
         Pending,
         Initialized,
         Completed,
+        PotPaid,
         Canceled
     }
 
@@ -151,6 +153,20 @@ contract NitroShibaDuel is Ownable {
             return true;
         }
     } */
+
+    /*//////////////////////////////////////////////////////////////
+                DATA RETRIEVAL
+    //////////////////////////////////////////////////////////////*/
+
+    // Get total duel count
+    function getDuelCount() external view returns (uint256) {
+        return Counters.current(duelCount);
+    }
+
+    // Get total payout
+    function getTotalPayout() external view returns (uint256) {
+        return Counters.current(totalPayout);
+    }
 
     /*//////////////////////////////////////////////////////////////
                 MANAGEMENT FUNCTIONS
@@ -420,11 +436,11 @@ contract NitroShibaDuel is Ownable {
         // Grab current duelID
         _duelID = Counters.current(duelCount);
 
-        // Confirm duel has not been completed or canceled
+        // Confirm duel has not been initialized
         if (duels[_duelID].status != Status.Pending) {
-            revert DuelStatus({
+            revert InvalidStatus({
                 duelID: _duelID,
-                status: duels[_duelID].status
+                current: duels[_duelID].status
             });
         }
 
@@ -488,6 +504,9 @@ contract NitroShibaDuel is Ownable {
         // Process withdrawal logic
         success = _transferToken(address(this), _recipient, pot);
 
+        // Update Duel Status
+        duels[_duelID].status = Status.PotPaid;
+
         emit DuelPotWithdrawn(_recipient, _duelID, pot);
 
         // Increment total payout via pot
@@ -518,6 +537,14 @@ contract NitroShibaDuel is Ownable {
 
     // Public function allowing the initiator to cancel a duel
     function cancelDuel(uint256 _duelID) public returns (bool success) {
+        // Confirm Duel Status is valid for cancelation
+        if (duels[_duelID].status != Status.Initialized) {
+            revert InvalidStatus({
+                duelID: _duelID,
+                current: duels[_duelID].status
+            });
+        }
+
         // Prevent cancelation of duel if expiry deadline is not reached
         // Expiry is enforced to prevent MEV attacks
         _confirmDeadline(_duelID);
@@ -533,6 +560,14 @@ contract NitroShibaDuel is Ownable {
 
     // Public function to allow duel winner to withdraw pot
     function withdrawDuel(uint256 _duelID) public returns (bool success) {
+        // Confirm Duel Status is valid for withdrawal
+        if (duels[_duelID].status != Status.Completed) {
+            revert InvalidStatus({
+                duelID: _duelID,
+                current: duels[_duelID].status
+            });
+        }
+
         // Confirm sender is duel winner
         address winner = _confirmWinner(_duelID);
 
