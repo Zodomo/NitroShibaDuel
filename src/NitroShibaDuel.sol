@@ -26,10 +26,12 @@ contract NitroShibaDuel is Ownable {
     error NotOwner(address sender, address owner, uint256 tokenId);
     error NotApproved(address sender, address tokenAddress);
     error NotInitiator(address sender, address initiator, uint256 duelID);
+    error NotParticipant(address candidate, uint256 duelID);
     error NotWinner(address sender, address winner, uint256 duelID);
     error NoWinner(uint256 duelID);
 
     error DuelStatus(uint256 duelID, Status status);
+    error DuelNotExpired(uint256 duelID, uint256 timestamp, uint256 deadline);
     error BetBelowThreshold(uint256 bet, uint256 threshold);
     error InsufficientBalance(address sender, uint256 required, uint256 balance);
     error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
@@ -39,12 +41,12 @@ contract NitroShibaDuel is Ownable {
                 EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event DuelInitiated(address initiator, uint256 duelID);
-    event DuelCanceled(address initiator, uint256 duelID);
-    event DuelPotWithdrawn(address recipient, uint256 duelID, uint256 pot);
+    event DuelInitiated(address indexed initiator, uint256 indexed duelID);
+    event DuelCanceled(address indexed initiator, uint256 indexed duelID);
+    event DuelPotWithdrawn(address indexed recipient, uint256 indexed duelID, uint256 indexed pot);
 
-    event TokenTransfer(address from, address to, uint256 amount);
-    event NFTTransfer(address from, address to, uint256 tokenId);
+    event TokenTransfer(address indexed from, address indexed to, uint256 indexed amount);
+    event NFTTransfer(address indexed from, address indexed to, uint256 indexed tokenId);
 
     /*//////////////////////////////////////////////////////////////
                 STORAGE
@@ -57,8 +59,13 @@ contract NitroShibaDuel is Ownable {
 
     // Incremential duel count value is used as duel identifier
     Counters.Counter public duelCount;
+    // Incremental $NISHIB payout total
+    Counters.Counter public totalPayout;
+
     // Minimum bet
     uint256 public minimumBet;
+    // Duel expiry timestamp
+    uint256 public duelExpiry;
 
     // Stores user $NISHIB balances for contract logic
     mapping(address => uint256) public nishibBalances;
@@ -86,23 +93,23 @@ contract NitroShibaDuel is Ownable {
         uint256 bet; // Static $NISHIB bet per player
         Mode mode; // Game mode
         Status status; // Game status
-        uint256[] outcomes; // Player VRF outcome values, highest always wins
+        uint256 deadline; // Duel deadline timestamp
+        bytes32[] vrfInput; // Initial VRF bytes32 input per player
+        uint256[] vrfOutput; // Output VRF numbers calculated after all players commit hashes
         address winner; // Winner address
+        uint256 participantCount; // Count of participants
         uint256 tokenPayout; // Total $NISHIB payout
         uint256 nftPayout; // NFT payout, if any
     }
     // uint256 count as duel identifier to Duel struct
     mapping(uint256 => Duel) public duels;
 
-    // uint256 duelId to address mapping to make initiator checks easier
-    mapping(uint256 => address) public initiators;
-
     /*//////////////////////////////////////////////////////////////
                 CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
     constructor() {
-
+    
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -147,6 +154,11 @@ contract NitroShibaDuel is Ownable {
     // Allows contract owner to change the minimum bet
     function changeMinimumBet_(uint256 _minimumBet) public onlyOwner {
         minimumBet = _minimumBet;
+    }
+    
+    // Allows contract owner to change the duel expiry deadline
+    function changeDuelExpiry_(uint256 _duelExpiry) public onlyOwner {
+        duelExpiry = _duelExpiry;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -194,6 +206,18 @@ contract NitroShibaDuel is Ownable {
             }
     }
 
+    // Confirm duel is not expired
+    function _confirmNotExpired(uint256 _duelID) internal view {
+        // Check if duel deadline hasn't been reached yet
+        if (duels[_duelID].deadline > block.timestamp) {
+            revert DuelNotExpired({
+                duelID: _duelID,
+                timestamp: block.timestamp,
+                deadline: duels[_duelID].deadline
+            });
+        }
+    }
+
     // Confirm the caller is the initiator
     function _confirmInitiator(uint256 _duelID) internal view {
         // Initiator check
@@ -201,6 +225,29 @@ contract NitroShibaDuel is Ownable {
             revert NotInitiator({
                 sender: msg.sender,
                 initiator: duels[_duelID].addresses[0],
+                duelID: _duelID
+            });
+        }
+    }
+
+    // Confirm if caller is a duel participant
+    function _confirmParticipant(address _candidate, uint256 _duelID) internal view returns (uint256 tokenId) {
+        // Store whether _candidate is found to trip error condition if necessary
+        bool found;
+
+        // Loop through all duel participants trying to find _candidate address
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // If _candidate found, return their Duels data index value
+            if (duels[_duelID].addresses[i] == _candidate) {
+                found = true;
+                return i; // Return will end loop
+            }
+        }
+
+        // Throw error if not found
+        if (!found) {
+            revert NotParticipant({
+                candidate: _candidate,
                 duelID: _duelID
             });
         }
@@ -279,24 +326,26 @@ contract NitroShibaDuel is Ownable {
             });
         }
 
-        // Set initiator of duel
-        initiators[_duelID] = _initializer;
-
         // Pack Duel struct
         duels[_duelID].addresses.push(_initializer);
         duels[_duelID].tokenIDs.push(_tokenId);
         duels[_duelID].bet = _bet;
         duels[_duelID].mode = _mode;
         duels[_duelID].status = Status.Initialized;
+        duels[_duelID].deadline = block.timestamp + duelExpiry;
+        duels[_duelID].participantCount += 1;
         duels[_duelID].tokenPayout += _bet;
-
-        // Increment duelCount
-        Counters.increment(duelCount);
 
         // Transfer initializer's bet to contract
         _transferToken(_initializer, address(this), _bet);
+
+        // Generate initial VRF hash
+        duels[_duelID].vrfInput.push(_vrfGenerateInitialHash(_initializer, _duelID));
+
         // Increment sender's total balance stored in contract
         nishibBalances[_initializer] += _bet;
+        // Increment duelCount
+        Counters.increment(duelCount);
 
         emit DuelInitiated(_initializer, _duelID);
 
@@ -305,11 +354,15 @@ contract NitroShibaDuel is Ownable {
 
     // Internal duel cancelation logic
     function _cancelDuel(uint256 _duelID) internal returns (bool success) {
+        // Prevent cancelation of duel if expiry deadline is not reached
+        // Expiry is enforced to prevent MEV attacks
+        _confirmNotExpired(_duelID);
+
         // Store initiator address so we can use it after destroying data if needed
         address initiator = duels[_duelID].addresses[0];
 
         // Loop to process withdrawals for all potential parties
-        for (uint i = 0; i < duels[_duelID].addresses.length; i++) {
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
             // Retrieve refundee address and refund value
             address refundee = duels[_duelID].addresses[i];
             uint256 refund = duels[_duelID].bet;
@@ -339,7 +392,37 @@ contract NitroShibaDuel is Ownable {
 
         emit DuelPotWithdrawn(_recipient, _duelID, pot);
 
+        // Increment total payout via pot
+        Counters.increment(totalPayout);
+
         return success;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                VRF LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    // Generate duelee's initial VRF hash
+    function _vrfGenerateInitialHash(address _duelee, uint256 _duelID) internal view returns (bytes32 vrfHash) {
+        // Find _duelee's Duel data index hash, if they're a valid duelee
+        uint256 index = _confirmParticipant(_duelee, _duelID);
+
+        // Generate initial VRF hash with Duel data and mined block data
+        // Multiple parameters is expensive but makes MEV nearly impossible
+        vrfHash = keccak256(abi.encodePacked(
+            _duelID,
+            duels[_duelID].addresses[index],
+            duels[_duelID].tokenIDs[index],
+            duels[_duelID].bet,
+            duels[_duelID].mode,
+            duels[_duelID].participantCount,
+            duels[_duelID].tokenPayout,
+            block.number,
+            block.timestamp,
+            block.difficulty
+        ));
+
+        return vrfHash;
     }
 
     /*//////////////////////////////////////////////////////////////
