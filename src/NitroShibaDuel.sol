@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
+// IMPORTANT: PROPERLY HANDLE $NISHIB TX FEE
+
 import "openzeppelin-contracts/access/Ownable.sol";
 import "openzeppelin-contracts/token/ERC20/IERC20.sol";
 import "openzeppelin-contracts/token/ERC721/IERC721.sol";
@@ -10,21 +12,37 @@ import "openzeppelin-contracts/utils/Counters.sol";
 
 contract NitroShibaDuel is Ownable {
 
+    /*//////////////////////////////////////////////////////////////
+                LIBRARY MODIFICATIONS
+    //////////////////////////////////////////////////////////////*/
+
     using Address for address;
     using Counters for Counters.Counter;
 
-    error BetBelowThreshold(uint256 bet, uint256 threshold);
-    error InsufficientBalance(address sender, uint256 required, uint256 balance);
-    error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
-    error DuelStatus(uint256 duelID, Status status);
-    error TransferFailed(address sender, address recipient, uint256 amount);
+    /*//////////////////////////////////////////////////////////////
+                CUSTOM ERRORS
+    //////////////////////////////////////////////////////////////*/
 
     error NotOwner(address sender, address owner, uint256 tokenId);
     error NotApproved(address sender, address tokenAddress);
     error NotInitiator(address sender, address initiator, uint256 duelID);
+    error NotWinner(address sender, address winner, uint256 duelID);
+    error NoWinner(uint256 duelID);
+
+    error DuelStatus(uint256 duelID, Status status);
+    error BetBelowThreshold(uint256 bet, uint256 threshold);
+    error InsufficientBalance(address sender, uint256 required, uint256 balance);
+    error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
+    error TransferFailed(address sender, address recipient, uint256 amount);
+
+    /*//////////////////////////////////////////////////////////////
+                EVENTS
+    //////////////////////////////////////////////////////////////*/
 
     event DuelInitiated(address initiator, uint256 duelID);
     event DuelCanceled(address initiator, uint256 duelID);
+    event DuelPotWithdrawn(address recipient, uint256 duelID, uint256 pot);
+
     event TokenTransfer(address from, address to, uint256 amount);
     event NFTTransfer(address from, address to, uint256 tokenId);
 
@@ -187,6 +205,28 @@ contract NitroShibaDuel is Ownable {
             });
         }
     }
+    
+    // Confirm the caller is the duel winner
+    function _confirmWinner(uint256 _duelID) internal view returns (address winner) {
+        // Retrieve winner
+        winner = duels[_duelID].winner;
+
+        // Confirm duel has a winner
+        if (winner == address(0x0)) {
+            revert NoWinner({ duelID: _duelID });
+        }
+
+        // Confirm winner is msg.sender
+        if (duels[_duelID].winner != msg.sender) {
+            revert NotWinner({
+                sender: msg.sender,
+                winner: duels[_duelID].winner,
+                duelID: _duelID
+            });
+        }
+
+        return winner;
+    }
 
     /*//////////////////////////////////////////////////////////////
                 INTERNAL DUEL FUNCTIONS
@@ -197,9 +237,9 @@ contract NitroShibaDuel is Ownable {
         address _from,
         address _to,
         uint256 _amount
-    ) internal {
+    ) internal returns (bool success) {
         // Revert if transfer fails
-        bool success = IERC20(nishibToken).transferFrom(_from, _to, _amount);
+        success = IERC20(nishibToken).transferFrom(_from, _to, _amount);
         if (!success) {
             revert TransferFailed({
                 sender: _from,
@@ -209,6 +249,8 @@ contract NitroShibaDuel is Ownable {
         }
 
         emit TokenTransfer(_from, _to, _amount);
+
+        return success;
     }
 
     // Internal duel initialization logic
@@ -246,6 +288,7 @@ contract NitroShibaDuel is Ownable {
         duels[_duelID].bet = _bet;
         duels[_duelID].mode = _mode;
         duels[_duelID].status = Status.Initialized;
+        duels[_duelID].tokenPayout += _bet;
 
         // Increment duelCount
         Counters.increment(duelCount);
@@ -275,12 +318,24 @@ contract NitroShibaDuel is Ownable {
             nishibBalances[refundee] -= refund;
 
             // Process refund
-            _transferToken(address(this), refundee, refund);
+            success = _transferToken(address(this), refundee, refund);
         }
 
         emit DuelCanceled(initiator, _duelID);
 
-        return true;
+        return success;
+    }
+
+    function _withdrawDuel(uint256 _duelID, address _recipient) internal returns (bool success) {
+        // Retrieve pot
+        uint256 pot = duels[_duelID].tokenPayout;
+
+        // Process withdrawal logic
+        success = _transferToken(address(this), _recipient, pot);
+
+        emit DuelPotWithdrawn(_recipient, _duelID, pot);
+
+        return success;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -310,6 +365,16 @@ contract NitroShibaDuel is Ownable {
 
         // Run internal duel cancellation logic
         success = _cancelDuel(_duelID);
+
+        return success;
+    }
+
+    // Public function to allow duel winner to withdraw pot
+    function withdrawDuel(uint256 _duelID) public returns (bool success) {
+        // Confirm sender is duel winner
+        address winner = _confirmWinner(_duelID);
+
+        success = _withdrawDuel(_duelID, winner);
 
         return success;
     }
