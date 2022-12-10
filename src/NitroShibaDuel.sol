@@ -314,12 +314,16 @@ contract NitroShibaDuel is Ownable {
             address refundee = duels[_duelID].addresses[i];
             uint256 refund = duels[_duelID].bet;
 
-            // Reduce user's stored contract balance
+            // Reduce user's and duel's stored contract balance
             nishibBalances[refundee] -= refund;
+            duels[_duelID].tokenPayout -= refund;
 
             // Process refund
             success = _transferToken(address(this), refundee, refund);
         }
+
+        // Alter duel struct to reflect cancelation
+        duels[_duelID].status = Status.Canceled;
 
         emit DuelCanceled(initiator, _duelID);
 
