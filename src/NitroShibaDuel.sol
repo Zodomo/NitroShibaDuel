@@ -28,10 +28,13 @@ contract NitroShibaDuel is Ownable {
     error NotInitiator(address sender, address initiator, uint256 duelID);
     error NotParticipant(address candidate, uint256 duelID);
     error NotWinner(address sender, address winner, uint256 duelID);
+    error NotEnoughParticipants(uint256 duelID);
     error NoWinner(uint256 duelID);
+    error NoSalt(uint256 duelID);
 
     error DuelStatus(uint256 duelID, Status status);
-    error DuelNotExpired(uint256 duelID, uint256 timestamp, uint256 deadline);
+    error DuelDeadline(uint256 duelID, uint256 timestamp, uint256 deadline);
+    error ImproperJackpotInitialization();
     error BetBelowThreshold(uint256 bet, uint256 threshold);
     error InsufficientBalance(address sender, uint256 required, uint256 balance);
     error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
@@ -44,6 +47,7 @@ contract NitroShibaDuel is Ownable {
     event DuelInitiated(address indexed initiator, uint256 indexed duelID);
     event DuelCanceled(address indexed initiator, uint256 indexed duelID);
     event DuelPotWithdrawn(address indexed recipient, uint256 indexed duelID, uint256 indexed pot);
+    event DuelSaltGenerated(uint256 duelID, bytes32 vrfSalt);
 
     event TokenTransfer(address indexed from, address indexed to, uint256 indexed amount);
     event NFTTransfer(address indexed from, address indexed to, uint256 indexed tokenId);
@@ -95,7 +99,8 @@ contract NitroShibaDuel is Ownable {
         Status status; // Game status
         uint256 deadline; // Duel deadline timestamp
         bytes32[] vrfInput; // Initial VRF bytes32 input per player
-        uint256[] vrfOutput; // Output VRF numbers calculated after all players commit hashes
+        bytes32 vrfSalt; // VRF salt calculated from hash of all vrfInputs
+        uint256[] vrfOutput; // Output VRF numbers calculated from hash of player vrfInput + vrfSalt
         address winner; // Winner address
         uint256 participantCount; // Count of participants
         uint256 tokenPayout; // Total $NISHIB payout
@@ -207,10 +212,10 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Confirm duel is not expired
-    function _confirmNotExpired(uint256 _duelID) internal view {
+    function _confirmDeadline(uint256 _duelID) internal view {
         // Check if duel deadline hasn't been reached yet
         if (duels[_duelID].deadline > block.timestamp) {
-            revert DuelNotExpired({
+            revert DuelDeadline({
                 duelID: _duelID,
                 timestamp: block.timestamp,
                 deadline: duels[_duelID].deadline
@@ -276,6 +281,97 @@ contract NitroShibaDuel is Ownable {
     }
 
     /*//////////////////////////////////////////////////////////////
+                VRF LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    // Generate duelee's initial VRF hash
+    function _vrfGenerateInput(address _duelee, uint256 _duelID) internal view returns (bytes32 vrfHash) {
+        // Find _duelee's Duel data index hash, if they're a valid duelee
+        uint256 index = _confirmParticipant(_duelee, _duelID);
+
+        // Generate initial VRF hash with Duel data and mined block data
+        // Multiple parameters is expensive but makes MEV nearly impossible
+        vrfHash = keccak256(abi.encodePacked(
+            _duelID,
+            duels[_duelID].addresses[index],
+            duels[_duelID].tokenIDs[index],
+            duels[_duelID].bet,
+            duels[_duelID].mode,
+            duels[_duelID].participantCount,
+            duels[_duelID].tokenPayout,
+            block.number,
+            block.timestamp,
+            block.difficulty
+        ));
+
+        return vrfHash;
+    }
+
+    // Generate combined VRF hash salt for use in calculating duelees' vrfOutputs
+    function _vrfGenerateSalt(uint256 _duelID) internal returns (bytes32 vrfSalt) {
+        // Require at least two participants as that is minimum edge case
+        if (duels[_duelID].participantCount > 1) {
+            revert NotEnoughParticipants({ duelID: _duelID });
+        }
+
+        // Jackpot mode is the only mode that may not have just two participants
+        // If in Jackpot mode, confirm deadline hasn't been reached
+        if (duels[_duelID].mode == Mode.Jackpot) {
+            // Throw error if jackpot deadline has not been reached
+            if (duels[_duelID].deadline > block.timestamp) {
+                revert DuelDeadline({
+                    duelID: _duelID,
+                    timestamp: block.timestamp,
+                    deadline: duels[_duelID].deadline
+                });
+            }
+        }
+
+        // Iteratively regenerate vrfSalt using each vrfInput hash
+        // I hope MEV bot operators are crying by this point
+        // Last iteration will be final vrfSalt hash
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            duels[_duelID].vrfSalt = keccak256(abi.encodePacked(
+                duels[_duelID].vrfSalt,
+                duels[_duelID].vrfInput[i],
+                block.number,
+                block.timestamp,
+                block.difficulty
+            ));
+        }
+
+        emit DuelSaltGenerated(_duelID, vrfSalt);
+
+        return vrfSalt;
+    }
+
+    // Generate final VRF hash output converted to uint256 for each user
+    function _vrfGenerateOutput(uint256 _duelID) internal {
+        // Confirm duel vrfSalt was created
+        if (duels[_duelID].vrfSalt == bytes32(0)) {
+            revert NoSalt({ duelID: _duelID });
+        }
+
+        // Calculate all participants' vrfOutputs
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // Hash vrfSalt hash with vrfInput hash
+            bytes32 saltedOutput = keccak256(abi.encodePacked(
+                duels[_duelID].vrfSalt,
+                duels[_duelID].vrfInput[i],
+                block.number,
+                block.timestamp,
+                block.difficulty
+            ));
+            
+            // Cast saltedOutput to uint256 number
+            uint256 saltedNum = uint256(saltedOutput);
+
+            // Store vrfOutput
+            duels[_duelID].vrfOutput.push(saltedNum);
+        }
+    }
+
+    /*//////////////////////////////////////////////////////////////
                 INTERNAL DUEL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
@@ -301,12 +397,18 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Internal duel initialization logic
+    // Cannot be used to initialize Jackpot duels
     function _initializeDuel(
         address _initializer,
         uint256 _tokenId,
         uint256 _bet,
         Mode _mode
     ) internal returns (uint256 _duelID) {
+        // Prevent function from initializing a jackpot
+        if (_mode == Mode.Jackpot) {
+            revert ImproperJackpotInitialization();
+        }
+
         // Prevent bids below minimum
         if (_bet < minimumBet) {
             revert BetBelowThreshold({
@@ -340,7 +442,7 @@ contract NitroShibaDuel is Ownable {
         _transferToken(_initializer, address(this), _bet);
 
         // Generate initial VRF hash
-        duels[_duelID].vrfInput.push(_vrfGenerateInitialHash(_initializer, _duelID));
+        duels[_duelID].vrfInput.push(_vrfGenerateInput(_initializer, _duelID));
 
         // Increment sender's total balance stored in contract
         nishibBalances[_initializer] += _bet;
@@ -354,10 +456,6 @@ contract NitroShibaDuel is Ownable {
 
     // Internal duel cancelation logic
     function _cancelDuel(uint256 _duelID) internal returns (bool success) {
-        // Prevent cancelation of duel if expiry deadline is not reached
-        // Expiry is enforced to prevent MEV attacks
-        _confirmNotExpired(_duelID);
-
         // Store initiator address so we can use it after destroying data if needed
         address initiator = duels[_duelID].addresses[0];
 
@@ -399,33 +497,6 @@ contract NitroShibaDuel is Ownable {
     }
 
     /*//////////////////////////////////////////////////////////////
-                VRF LOGIC
-    //////////////////////////////////////////////////////////////*/
-
-    // Generate duelee's initial VRF hash
-    function _vrfGenerateInitialHash(address _duelee, uint256 _duelID) internal view returns (bytes32 vrfHash) {
-        // Find _duelee's Duel data index hash, if they're a valid duelee
-        uint256 index = _confirmParticipant(_duelee, _duelID);
-
-        // Generate initial VRF hash with Duel data and mined block data
-        // Multiple parameters is expensive but makes MEV nearly impossible
-        vrfHash = keccak256(abi.encodePacked(
-            _duelID,
-            duels[_duelID].addresses[index],
-            duels[_duelID].tokenIDs[index],
-            duels[_duelID].bet,
-            duels[_duelID].mode,
-            duels[_duelID].participantCount,
-            duels[_duelID].tokenPayout,
-            block.number,
-            block.timestamp,
-            block.difficulty
-        ));
-
-        return vrfHash;
-    }
-
-    /*//////////////////////////////////////////////////////////////
                 PUBLIC DUEL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
@@ -447,6 +518,10 @@ contract NitroShibaDuel is Ownable {
 
     // Public function allowing the initiator to cancel a duel
     function cancelDuel(uint256 _duelID) public returns (bool success) {
+        // Prevent cancelation of duel if expiry deadline is not reached
+        // Expiry is enforced to prevent MEV attacks
+        _confirmDeadline(_duelID);
+
         // Confirm sender is duel initiator
         _confirmInitiator(_duelID);
 
