@@ -831,6 +831,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     }
 
     // Internal duel join logic
+    // TODO: Needs to engage all Duel fields
     function _joinDuel(uint256 _tokenId, uint256 _duelID) internal {
         // Retrieve duel mode and bet for code clarity
         Mode mode = duels[_duelID].mode;
@@ -847,6 +848,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // SimpleBet and Jackpot execution logic
         else if (mode == Mode.SimpleBet || mode == Mode.Jackpot) {
             IERC20(nishibToken).transferFrom(msg.sender, address(this), bet);
+            nishibBalances[msg.sender] += bet;
+            duels[_duelID].tokenPayout += bet;
         }
         // PVP execution logic
         else if (mode == Mode.PVP) {
@@ -855,6 +858,9 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // PVPPlus execution logic
         else if (mode == Mode.PVPPlus) {
             IERC20(nishibToken).transferFrom(msg.sender, address(this), bet);
+            nishibBalances[msg.sender] += bet;
+            duels[_duelID].tokenPayout += bet;
+
             IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
         }
         // Throw if an invalid Mode was somehow passed
@@ -956,7 +962,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 duelID: _duelID,
                 current: duels[_duelID].status
             });
-        } else if (duels[_duelID].mode != Mode.Jackpot) {
+        } else if (duels[_duelID].mode == Mode.Jackpot) {
             revert ImproperJackpotCancelation({ duelID: _duelID });
         }
 

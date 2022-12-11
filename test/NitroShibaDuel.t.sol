@@ -81,8 +81,8 @@ contract NitroShibaDuelTest is DSTestPlus {
             address(nft),
             etherToWei(1),
             etherToWei(100),
-            300,
-            300
+            0,
+            0
         );
 
         // Mint 0xABCD and 0xBEEF 100 tokens
@@ -111,11 +111,20 @@ contract NitroShibaDuelTest is DSTestPlus {
     }
 
     
-    // Test to make sure duel initiation executes
-    function testDuelInitiation() public {
+    // Test initiateDuel()
+    function testInitiateDuel() public {
         // Initiate duel as 0xABCD
         hevm.prank(address(0xABCD));
         uint256 duel = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
         require(duel == 1, "duelID_INCORRECT");
-    } 
+    }
+
+    // Test cancelDuel()
+    function testCancelDuel() public {
+        // Initiate duel as 0xABCD
+        hevm.startPrank(address(0xABCD));
+        game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+        game.cancelDuel(1);
+        hevm.stopPrank();
+    }
 }

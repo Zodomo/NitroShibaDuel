@@ -3,6 +3,8 @@
 
 A simple on-chain game for holders of any Nitro Shiba NFT collection.
 
+WARNING: NOT YET READY FOR PRODUCTION, STILL IN DEVELOPMENT
+
 
 
 
