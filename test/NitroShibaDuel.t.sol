@@ -65,9 +65,21 @@ contract NitroShibaDuelTest is DSTestPlus {
     MockERC721 nft;
     NitroShibaDuel game;
 
+    // ether to wei unit conversion
+    function etherToWei(uint256 _value) public pure returns (uint256) {
+        return _value * (10 ** 18);
+    }
+
     function setUp() public {
         token = new MockERC20("Nitro Shiba", "NISHIB", 18);
         nft = new MockERC721("Nitro Shibas Family", "NSF");
-        game = new NitroShibaDuel(address(token), address(nft));
+        game = new NitroShibaDuel(
+            address(token),
+            address(nft),
+            etherToWei(1),
+            etherToWei(100),
+            300,
+            300
+        );
     }
 }

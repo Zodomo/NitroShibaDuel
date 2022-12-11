@@ -71,6 +71,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     Counters.Counter public duelCount;
     // Incremental $NISHIB payout total
     Counters.Counter public totalPayout;
+    // Current duels index for active jackpot
+    uint256 public jackpotIndex;
 
     // Minimum bet
     uint256 public minimumBet;
@@ -80,8 +82,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     uint256 public duelExpiry;
     // Jackpot term
     uint256 public jackpotExpiry;
-    // Current duels index for active jackpot
-    uint256 public jackpotIndex;
 
     // Stores user $NISHIB balances for contract logic
     mapping(address => uint256) public nishibBalances;
@@ -129,12 +129,24 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor(address _nishibToken, address _nishibNFT) {
+    constructor(
+        address _nishibToken,
+        address _nishibNFT,
+        uint256 _minimumBet,
+        uint256 _maximumBet,
+        uint256 _duelExpiry,
+        uint256 _jackpotExpiry
+    ) {
         // Start duels index at 1 because we don't want default values in execution
         Counters.increment(duelCount);
 
         nishibToken = _nishibToken; // 0x4DAD357726b41bb8932764340ee9108cC5AD33a0
         nishibNFT = _nishibNFT; // 0x74B8e48823658af4296814a8eC6baf271BcFa1e0
+
+        minimumBet = _minimumBet;
+        maximumBet = _maximumBet;
+        duelExpiry = _duelExpiry;
+        jackpotExpiry = _jackpotExpiry;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -190,6 +202,15 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
         // Run internal duel cancelation logic
         _cancelDuel(_jackpotIndex);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                LIBRARY FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    // ether to wei unit conversion
+    function etherToWei(uint256 _value) public pure returns (uint256) {
+        return _value * (10 ** 18);
     }
 
     /*//////////////////////////////////////////////////////////////
