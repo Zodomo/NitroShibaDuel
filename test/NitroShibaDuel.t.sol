@@ -72,7 +72,7 @@ contract NitroShibaDuelTest is DSTestPlus {
     }
 
     // Setup logic to run before each test
-    function testSetUp() public {
+    function setUp() public {
         // Set up all contracts
         token = new MockERC20("Nitro Shiba", "NISHIB", 18);
         nft = new MockERC721("Nitro Shibas Family", "NSF");
@@ -88,24 +88,14 @@ contract NitroShibaDuelTest is DSTestPlus {
         // Mint 0xABCD and 0xBEEF 100 tokens
         token.mint(address(0xABCD), etherToWei(100));
         token.mint(address(0xBEEF), etherToWei(100));
-        require(token.balanceOf(address(0xABCD)) == etherToWei(100), "TOKEN_MINT_BALANCE");
-        require(token.balanceOf(address(0xBEEF)) == etherToWei(100), "TOKEN_MINT_BALANCE");
-        console.log(token.balanceOf(address(0xABCD)));
-        console.log(token.balanceOf(address(0xBEEF)));
 
         // Mint 0xABCD and 0xBEEF 3 NFTs
         nft.mint(address(0xABCD), 1);
         nft.mint(address(0xBEEF), 2);
-        require(nft.ownerOf(1) == address(0xABCD), "NFT_MINT_OWNER");
-        require(nft.ownerOf(2) == address(0xBEEF), "NFT_MINT_OWNER");
         nft.mint(address(0xABCD), 3);
         nft.mint(address(0xBEEF), 4);
-        require(nft.ownerOf(3) == address(0xABCD), "NFT_MINT_OWNER");
-        require(nft.ownerOf(4) == address(0xBEEF), "NFT_MINT_OWNER");
         nft.mint(address(0xABCD), 5);
         nft.mint(address(0xBEEF), 6);
-        require(nft.ownerOf(5) == address(0xABCD), "NFT_MINT_OWNER");
-        require(nft.ownerOf(6) == address(0xBEEF), "NFT_MINT_OWNER");
 
         // Give contract approvals
         // 0xABCD
@@ -120,11 +110,12 @@ contract NitroShibaDuelTest is DSTestPlus {
         hevm.stopPrank();
     }
 
-    /*
+    
     // Test to make sure duel initiation executes
     function testDuelInitiation() public {
+        // Initiate duel as 0xABCD
         hevm.prank(address(0xABCD));
-        uint256 duel = game.initiateDuel(1, etherToWei(1), NitroShibaDuel.Mode.SimpleBet);
-        require(duel == 1, "DUELID_INCORRECT");
-    } */
+        uint256 duel = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+        require(duel == 1, "duelID_INCORRECT");
+    } 
 }

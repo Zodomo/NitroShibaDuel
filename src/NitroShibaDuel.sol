@@ -22,7 +22,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     //////////////////////////////////////////////////////////////*/
 
     error NotOwner(address sender, address owner, uint256 tokenId);
-    error NotApproved(address sender, address tokenAddress);
+    error NotApproved(address sender, address tokenAddress, uint256 amount);
     error NotInitiator(address sender, address initiator, uint256 duelID);
     error NotParticipant(address candidate, uint256 duelID);
     error NotWinner(address sender, address winner, uint256 duelID);
@@ -217,6 +217,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 INTERNAL CHECKS
     //////////////////////////////////////////////////////////////*/
 
+    // ****************** TODO: FIX APPROVAL CHECKING ***************************
+
     // Confirm we have token approval and ownership
     function _confirmToken(address _sender, uint256 _value) internal view {
         // Ownership/Balance check
@@ -232,7 +234,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         if (IERC20(nishibToken).allowance(_sender, address(this)) < _value) {
             revert NotApproved({
                 sender: _sender,
-                tokenAddress: nishibToken
+                tokenAddress: nishibToken,
+                amount: _value
             });
         }
     }
@@ -249,13 +252,15 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
 
         // Approval check
-        if (IERC721(nishibNFT).getApproved(_tokenId) != address(this) ||
-            IERC721(nishibNFT).isApprovedForAll(_sender, address(this)) == false) {
-                revert NotApproved({
-                    sender: _sender,
-                    tokenAddress: nishibNFT
-                });
-            }
+        if (IERC721(nishibNFT).getApproved(_tokenId) == address(this)) { return; }
+        else if (IERC721(nishibNFT).isApprovedForAll(_sender, address(this)) == true) { return; }
+        else {
+            revert NotApproved({
+                sender: _sender,
+                tokenAddress: nishibNFT,
+                amount: 1
+            });
+        }
     }
 
     // Confirm duel is not expired
