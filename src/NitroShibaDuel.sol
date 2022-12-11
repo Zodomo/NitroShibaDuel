@@ -992,6 +992,14 @@ contract NitroShibaDuel is Ownable {
             });
         }
 
+        // Confirm winner hasn't withdrawn pot
+        if (duels[_duelID].status == Status.PotPaid) {
+            revert InvalidStatus({
+                duelID: _duelID,
+                current: duels[_duelID].status
+            });
+        }
+
         // Require only two participants
         if (duels[_duelID].participantCount > 2) {
             revert TooManyParticipants({
