@@ -35,9 +35,12 @@ contract NitroShibaDuel is Ownable {
 
     error InvalidStatus(uint256 duelID, Status current);
     error InvalidMode(uint256 duelID, Mode mode);
+    error TooManyParticipants(uint256 duelID, uint256 required, uint256 count);
     error DuelDeadline(uint256 duelID, uint256 timestamp, uint256 deadline);
-    error ImproperJackpotInitialization();
+    error ImproperJackpotInitialization(uint256 jackpotIndex);
+    error ImproperJackpotCancelation(uint256 duelID);
     error BetBelowThreshold(uint256 bet, uint256 threshold);
+    error BetAboveThreshold(uint256 bet, uint256 threshold);
     error InsufficientBalance(address sender, uint256 required, uint256 balance);
     error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
     error TransferFailed(address sender, address recipient, uint256 amount);
@@ -48,10 +51,11 @@ contract NitroShibaDuel is Ownable {
 
     event DuelInitiated(address indexed initiator, uint256 indexed duelID);
     event DuelCanceled(address indexed initiator, uint256 indexed duelID);
-    event DuelExecuted(address indexed executor, address indexed winner, uint256 duelID);
-    event DuelSaltGenerated(uint256 duelID, bytes32 vrfSalt);
-    event DuelDONSwitched(address indexed participant, uint256 duelID);
-    event DuelDONEnabled(uint256 duelID);
+    event DuelJoined(address indexed challenger, uint256 indexed duelID);
+    event DuelExecuted(address indexed executor, address indexed winner, uint256 indexed duelID);
+    event DuelSaltGenerated(uint256 indexed duelID, bytes32 indexed vrfSalt);
+    event DuelDONSwitched(address indexed participant, uint256 indexed duelID);
+    event DuelDONEnabled(uint256 indexed duelID);
     event DuelPotWithdrawn(address indexed recipient, uint256 indexed duelID, uint256 indexed pot);
 
     event TokenTransfer(address indexed from, address indexed to, uint256 indexed amount);
@@ -73,8 +77,14 @@ contract NitroShibaDuel is Ownable {
 
     // Minimum bet
     uint256 public minimumBet;
-    // Duel expiry timestamp
+    // Maximum bet
+    uint256 public maximumBet;
+    // Minimum duel term
     uint256 public duelExpiry;
+    // Jackpot term
+    uint256 public jackpotExpiry;
+    // Current duels index for active jackpot
+    uint256 public jackpotIndex;
 
     // Stores user $NISHIB balances for contract logic
     mapping(address => uint256) public nishibBalances;
@@ -123,7 +133,8 @@ contract NitroShibaDuel is Ownable {
     //////////////////////////////////////////////////////////////*/
 
     constructor() {
-    
+        // Start duels index at 1 because we don't want default values in execution
+        Counters.increment(duelCount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -183,10 +194,27 @@ contract NitroShibaDuel is Ownable {
     function changeMinimumBet_(uint256 _minimumBet) public onlyOwner {
         minimumBet = _minimumBet;
     }
+
+    // Allows contract owner to change the maximum bet
+    function changeMaximumBet_(uint256 _maximumBet) public onlyOwner {
+        maximumBet = _maximumBet;
+    }
     
     // Allows contract owner to change the duel expiry deadline
     function changeDuelExpiry_(uint256 _duelExpiry) public onlyOwner {
         duelExpiry = _duelExpiry;
+    }
+
+    // Allows contract owner to change the jackpot term
+    function changeJackpotExpiry_(uint256 _jackpotExpiry) public onlyOwner {
+        jackpotExpiry = _jackpotExpiry;
+    }
+
+    // Only the contract owner can cancel an initiated jackpot
+    // Since any community member can initiate a jackpot, it would be considered chaotic
+    // to trust random initiators to randomly cancel high-participation jackpots
+    function cancelJackpot_(uint256 _jackpotIndex) public onlyOwner {
+        _cancelDuel(_jackpotIndex);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -444,6 +472,12 @@ contract NitroShibaDuel is Ownable {
         address _to,
         uint256 _amount
     ) internal returns (bool success) {
+        // If _amount is zero, PVP mode is engaged, so skip transfer logic
+        if (_amount == 0) {
+            success = true;
+            return success;
+        }
+
         // Revert if transfer fails
         success = IERC20(nishibToken).transferFrom(_from, _to, _amount);
         if (!success) {
@@ -514,6 +548,25 @@ contract NitroShibaDuel is Ownable {
         }
     }
 
+    // Internal function to handle PVP and PVPPlus NFT transfers
+    function _adjustNFTOwnership(uint256 _duelID) internal {
+        // Retrieve winner
+        address winner = duels[_duelID].winner;
+
+        // Transfer all participant NFTs to winner
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // Confirm participant is not winner
+            if (duels[_duelID].addresses[i] != winner) {
+                // Retrieve participant's staked NFT tokenId
+                uint256 tokenId = duels[_duelID].tokenIDs[i];
+
+                IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+
+                emit NFTTransfer(address(this), winner, tokenId);
+            }
+        }
+    }
+
     // Internal sorting logic to determine winner
     function _determineWinner(uint256 _duelID) internal view returns (address winner) {
         // Store winning index value and vrfOutput for loop iterations
@@ -573,7 +626,7 @@ contract NitroShibaDuel is Ownable {
 
 
     // Internal function to process different game mode logic
-    function _executeGame(uint256 _duelID) internal {
+    function _executeTransfers(uint256 _duelID) internal {
         // Retrireve duel game mode
         Mode gameMode = duels[_duelID].mode;
 
@@ -585,13 +638,14 @@ contract NitroShibaDuel is Ownable {
             _adjustDONBalances(_duelID);
         }
         else if (gameMode == Mode.PVP) { // PVP
-
+            _adjustNFTOwnership(_duelID);
         }
         else if (gameMode == Mode.PVPPlus) { // PVPPlus
-
+            _adjustBalances(_duelID);
+            _adjustNFTOwnership(_duelID);
         }
         else if (gameMode == Mode.Jackpot) { // PVPPlus
-
+            _adjustBalances(_duelID);
         }
         else {
             revert InvalidMode({
@@ -620,17 +674,37 @@ contract NitroShibaDuel is Ownable {
         uint256 _bet,
         Mode _mode
     ) internal returns (uint256 _duelID) {
-        // Prevent function from initializing a jackpot
-        if (_mode == Mode.Jackpot) {
-            revert ImproperJackpotInitialization();
+        // Block DoubleOrNothing as it more of a modifier than a mode
+        if (_mode == Mode.DoubleOrNothing) {
+            revert InvalidMode({
+                duelID: Counters.current(duelCount),
+                mode: _mode
+            });
         }
 
-        // Prevent bids below minimum
+        // Prevent more than one active jackpot
+        if (_mode == Mode.Jackpot && 
+            duels[jackpotIndex].deadline < block.timestamp) {
+                revert ImproperJackpotInitialization({ jackpotIndex: jackpotIndex });
+        }
+
+        // Prevent non-PVP bets below minimum and above maximum
         if (_bet < minimumBet) {
             revert BetBelowThreshold({
                 bet: _bet,
                 threshold: minimumBet
             });
+        } else if (_bet > maximumBet) {
+            revert BetAboveThreshold({
+                bet: _bet,
+                threshold: maximumBet
+            });
+        // Transfer NFT if (_bet is zero and PVP mode) is selected or if PVPPlus is selected
+        } else if ((_bet == 0 && _mode == Mode.PVP) || 
+            _mode == Mode.PVPPlus) {
+                IERC721(nishibNFT).safeTransferFrom(_initializer, address(this), _tokenId);
+
+                emit NFTTransfer(_initializer, address(this), _tokenId);
         }
 
         // Grab current duelID
@@ -651,6 +725,10 @@ contract NitroShibaDuel is Ownable {
         duels[_duelID].mode = _mode;
         duels[_duelID].status = Status.Initialized;
         duels[_duelID].deadline = block.timestamp + duelExpiry;
+        // If Jackpot, overwrite deadline
+        if (_mode == Mode.Jackpot) {
+            duels[_duelID].deadline = block.timestamp + jackpotExpiry;
+        }
         duels[_duelID].participantCount += 1;
         duels[_duelID].tokenPayout += _bet;
 
@@ -672,9 +750,6 @@ contract NitroShibaDuel is Ownable {
 
     // Internal duel cancelation logic
     function _cancelDuel(uint256 _duelID) internal returns (bool success) {
-        // Store initiator address so we can use it after destroying data if needed
-        address initiator = duels[_duelID].addresses[0];
-
         // Loop to process withdrawals for all potential parties
         for (uint i = 0; i < duels[_duelID].participantCount; i++) {
             // Retrieve refundee address and refund value
@@ -692,15 +767,51 @@ contract NitroShibaDuel is Ownable {
         // Alter duel struct to reflect cancelation
         duels[_duelID].status = Status.Canceled;
 
-        emit DuelCanceled(initiator, _duelID);
+        emit DuelCanceled(msg.sender, _duelID);
 
         return success;
+    }
+
+    // Internal duel join logic
+    function _joinDuel(uint256 _tokenId, uint256 _duelID) internal {
+        // Retrieve duel mode and bet for code clarity
+        Mode mode = duels[_duelID].mode;
+        uint256 bet = duels[_duelID].bet;
+
+        // Block joining DoubleOrNothing mode as it more of a modifier than a mode
+        // DoubleOrNothing rolls are handled by doubleOrNothingDuel()
+        if (mode == Mode.DoubleOrNothing) {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: mode
+            });
+        }
+        // SimpleBet and Jackpot execution logic
+        else if (mode == Mode.SimpleBet || mode == Mode.Jackpot) {
+            IERC20(nishibToken).transferFrom(msg.sender, address(this), bet);
+        }
+        // PVP execution logic
+        else if (mode == Mode.PVP) {
+            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
+        }
+        // PVPPlus execution logic
+        else if (mode == Mode.PVPPlus) {
+            IERC20(nishibToken).transferFrom(msg.sender, address(this), bet);
+            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
+        }
+        // Throw if an invalid Mode was somehow passed
+        else {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: mode
+            });
+        }
     }
 
     // Internal duel execution logic
     function _executeDuel(uint256 _duelID) internal returns (address winner) {
         // Don't regenerate vrfSalt if vrfDONSalt is present
-        if (duels[_duelID].vrfSalt == bytes32(0)) {
+        if (duels[_duelID].vrfDONSalt == bytes32(0)) {
             // Generate vrfSalt
             duels[_duelID].vrfSalt = _vrfGenerateSalt(_duelID);
         }
@@ -715,7 +826,7 @@ contract NitroShibaDuel is Ownable {
         duels[_duelID].winner = winner;
 
         // Process specific game mode logic
-        _executeGame(_duelID);
+        _executeTransfers(_duelID);
 
         // Set Duel Status to Completed
         duels[_duelID].status = Status.Completed;
@@ -761,6 +872,7 @@ contract NitroShibaDuel is Ownable {
     //////////////////////////////////////////////////////////////*/
 
     // Public function to initiate a duel instance
+    // Double or nothing is the only mode that cannot be initiated
     function initiateDuel(
         uint256 _tokenId,
         uint256 _bet,
@@ -784,6 +896,8 @@ contract NitroShibaDuel is Ownable {
                 duelID: _duelID,
                 current: duels[_duelID].status
             });
+        } else if (duels[_duelID].mode != Mode.Jackpot) {
+            revert ImproperJackpotCancelation({ duelID: _duelID });
         }
 
         // Prevent cancelation of duel if expiry deadline is not reached
@@ -797,6 +911,38 @@ contract NitroShibaDuel is Ownable {
         success = _cancelDuel(_duelID);
 
         return success;
+    }
+
+    // Public function to allow anyone to join a duel once per wallet
+    function joinDuel(uint256 _tokenId, uint256 _duelID) public {
+        // Confirm token and NFT approvals and ownership
+        _confirmToken(msg.sender, duels[_duelID].bet);
+        _confirmNFT(msg.sender, _tokenId);
+
+        // Prevent joining a completed duel
+        if (duels[_duelID].status == Status.Completed) {
+            revert InvalidStatus({
+                duelID: _duelID,
+                current: duels[_duelID].status
+            });
+        }
+
+        // Block joining DoubleOrNothing mode as it more of a modifier than a mode
+        // DoubleOrNothing rolls are handled by doubleOrNothingDuel()
+        if (duels[_duelID].mode == Mode.DoubleOrNothing) {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: duels[_duelID].mode
+            });
+        }
+
+        // Require prior initialization by checking participants
+        if (duels[_duelID].participantCount > 0) {
+            revert NotEnoughParticipants({ duelID: _duelID });
+        }
+
+        // Call internal duel join logic
+        _joinDuel(_tokenId, _duelID);
     }
 
     // Public function allowing anyone to execute game logic and engage VRF logic
@@ -834,8 +980,27 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Allow loser to stake ANY owned NitroShiba NFT as their DoubleOrNothing NFT wager
+    // Both winner and loser needs to call to engage. Second caller triggers execution.
     // Designed to allow multiple runs of DoubleOrNothing
+    // Only SimpleBet with two participants can run DoubleOrNothing
     function doubleOrNothingDuel(uint256 _duelID, uint256 _tokenId) public {
+        // Require SimpleBet Mode
+        if (duels[_duelID].mode != Mode.SimpleBet) {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: duels[_duelID].mode
+            });
+        }
+
+        // Require only two participants
+        if (duels[_duelID].participantCount > 2) {
+            revert TooManyParticipants({
+                duelID: _duelID,
+                required: 2,
+                count: duels[_duelID].participantCount
+            });
+        }
+
         // If Allow only winner and loser to run logic
         // If not winner, then loser only
         if (_confirmWinner(_duelID) == msg.sender) {
@@ -851,6 +1016,8 @@ contract NitroShibaDuel is Ownable {
             // Stake NFT into contract
             IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
             duels[_duelID].nftPayout = _tokenId;
+
+            emit NFTTransfer(msg.sender, address(this), _tokenId);
 
             // Set DoubleOrNothing switch to true
             duels[_duelID].DONSwitch[msg.sender] = true;
