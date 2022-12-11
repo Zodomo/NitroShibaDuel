@@ -64,9 +64,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     //////////////////////////////////////////////////////////////*/
 
     // Token and NFT contract addresses
-    // Immutable to prevent any changes whatsoever
-    address immutable nishibToken = 0x4DAD357726b41bb8932764340ee9108cC5AD33a0;
-    address immutable nishibNFT = 0x74B8e48823658af4296814a8eC6baf271BcFa1e0;
+    address nishibToken; // 0x4DAD357726b41bb8932764340ee9108cC5AD33a0
+    address nishibNFT; // 0x74B8e48823658af4296814a8eC6baf271BcFa1e0
 
     // Incremential duel count value is used as duel identifier
     Counters.Counter public duelCount;
@@ -130,9 +129,12 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor() {
+    constructor(address _nishibToken, address _nishibNFT) {
         // Start duels index at 1 because we don't want default values in execution
         Counters.increment(duelCount);
+
+        nishibToken = _nishibToken; // 0x4DAD357726b41bb8932764340ee9108cC5AD33a0
+        nishibNFT = _nishibNFT; // 0x74B8e48823658af4296814a8eC6baf271BcFa1e0
     }
 
     /*//////////////////////////////////////////////////////////////
