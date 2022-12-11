@@ -6,11 +6,11 @@ pragma solidity ^0.8.17;
 import "openzeppelin-contracts/access/Ownable.sol";
 import "openzeppelin-contracts/token/ERC20/IERC20.sol";
 import "openzeppelin-contracts/token/ERC721/IERC721.sol";
-import "openzeppelin-contracts/token/ERC721/IERC721Receiver.sol";
+import "openzeppelin-contracts/token/ERC721/utils/ERC721Holder.sol";
 import "openzeppelin-contracts/utils/Address.sol";
 import "openzeppelin-contracts/utils/Counters.sol";
 
-contract NitroShibaDuel is Ownable {
+contract NitroShibaDuel is Ownable, ERC721Holder {
 
     /*//////////////////////////////////////////////////////////////
                 LIBRARY MODIFICATIONS
@@ -135,14 +135,6 @@ contract NitroShibaDuel is Ownable {
     constructor() {
         // Start duels index at 1 because we don't want default values in execution
         Counters.increment(duelCount);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                IERC721Receiver
-    //////////////////////////////////////////////////////////////*/
-
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
-        return IERC721Receiver.onERC721Received.selector;
     }
 
     /*//////////////////////////////////////////////////////////////
