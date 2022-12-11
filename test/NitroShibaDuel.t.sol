@@ -112,15 +112,15 @@ contract NitroShibaDuelTest is DSTestPlus {
 
     
     // Test initiateDuel()
-    function testInitiateDuel() public {
+    function testInitiateUninitiatedDuel() public {
         // Initiate duel as 0xABCD
         hevm.prank(address(0xABCD));
         uint256 duel = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
         require(duel == 1, "duelID_INCORRECT");
     }
 
-    // Test cancelDuel()
-    function testCancelDuel() public {
+    // Test cancelDuel() immediately after initiation
+    function testCancelInitiatedDuel() public {
         // Initiate duel as 0xABCD
         hevm.startPrank(address(0xABCD));
         game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);

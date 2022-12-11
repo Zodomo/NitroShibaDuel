@@ -40,7 +40,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     error ImproperJackpotCancelation(uint256 duelID);
     error BetBelowThreshold(uint256 bet, uint256 threshold);
     error BetAboveThreshold(uint256 bet, uint256 threshold);
-    error InsufficientBalance(address sender, uint256 required, uint256 balance);
+    error InsufficientBalance(address sender, address recipient, uint256 required, uint256 balance);
     error InvalidRecipient(address operator, address from, uint256 tokenId, bytes data);
     error TransferFailed(address sender, address recipient, uint256 amount);
 
@@ -226,6 +226,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         if (IERC20(nishibToken).balanceOf(_sender) < _value) {
             revert InsufficientBalance({
                 sender: _sender,
+                recipient: address(0x0),
                 required: _value,
                 balance: IERC20(nishibToken).balanceOf(_sender)
             });
@@ -474,6 +475,26 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         address _to,
         uint256 _amount
     ) internal returns (bool success) {
+        // Prevent self-transfers
+        if (_from == _to) {
+            revert TransferFailed({
+                sender: _from,
+                recipient: _to,
+                amount: _amount
+            });
+        }
+
+        // Prevent transfer if contract balance is too low
+        if (_from == address(this) && 
+            _amount > IERC20(nishibToken).balanceOf(address(this))) {
+                revert InsufficientBalance({
+                    sender: _from,
+                    recipient: _to,
+                    required: _amount,
+                    balance: IERC20(nishibToken).balanceOf(_from)
+                });
+        }
+
         // If _amount is zero, PVP mode is engaged, so skip transfer logic
         if (_amount == 0) {
             success = true;
@@ -488,6 +509,17 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 recipient: _to,
                 amount: _amount
             });
+        }
+
+        // Process contract balance changes
+        // Withdrawal
+        if (_from == address(this)) {
+            // Reduce contract balance for recipient
+            nishibBalances[_to] -= _amount;
+        }
+        // Deposit
+        else if (_to == address(this)) {
+            nishibBalances[_from] += _amount;
         }
 
         emit TokenTransfer(_from, _to, _amount);
@@ -523,8 +555,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             address refundee = duels[_duelID].addresses[i];
             uint256 refund = duels[_duelID].bet;
 
-            // Reduce user's and duel's stored contract balance
-            nishibBalances[refundee] -= refund;
+            // Deduct tokens from totalPayout
             duels[_duelID].tokenPayout -= refund;
 
             // Process refund
@@ -615,9 +646,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 // Retrieve participant's staked NFT tokenId
                 uint256 tokenId = duels[_duelID].tokenIDs[i];
 
-                IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
-
-                emit NFTTransfer(address(this), winner, tokenId);
+                _transferNFT(address(this), winner, tokenId);
             }
         }
     }
@@ -774,9 +803,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // Transfer NFT if (_bet is zero and PVP mode) is selected or if PVPPlus is selected
         } else if ((_bet == 0 && _mode == Mode.PVP) || 
             _mode == Mode.PVPPlus) {
-                IERC721(nishibNFT).safeTransferFrom(_initializer, address(this), _tokenId);
-
-                emit NFTTransfer(_initializer, address(this), _tokenId);
+                _transferNFT(_initializer, address(this), _tokenId);
         }
 
         // Grab current duelID
@@ -804,14 +831,26 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         duels[_duelID].participantCount += 1;
         duels[_duelID].tokenPayout += _bet;
 
+        // Store contract balance for balance checks
+        uint256 balance = IERC20(nishibToken).balanceOf(address(this));
         // Transfer initializer's bet to contract
-        _transferToken(_initializer, address(this), _bet);
+        bool success = _transferToken(_initializer, address(this), _bet);
+        // Throw error if deposit not successful
+        if (!success) {
+            revert TransferFailed({
+                sender: _initializer,
+                recipient: address(this),
+                amount: _bet
+            });
+        }
+        // Throw error if contract balance didn't increase and bet is > 0
+        if (_bet > 0) {
+            require(IERC20(nishibToken).balanceOf(address(this)) > balance, "BALANCE_DIDNT_INCREASE");
+        }
 
         // Generate initial VRF hash
         duels[_duelID].vrfInput.push(_vrfGenerateInput(_initializer, _duelID));
 
-        // Increment sender's total balance stored in contract
-        nishibBalances[_initializer] += _bet;
         // Increment duelCount
         Counters.increment(duelCount);
 
@@ -858,7 +897,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         else if (mode == Mode.SimpleBet || mode == Mode.Jackpot) {
             // Handle token transfer and related Duel data
             _transferToken(msg.sender, address(this), bet);
-            nishibBalances[msg.sender] += bet;
             duels[_duelID].tokenPayout += bet;
 
             // Execute remaining duel logic
@@ -876,7 +914,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         else if (mode == Mode.PVPPlus) {
             // Handle token transfer and related Duel data
             _transferToken(msg.sender, address(this), bet);
-            nishibBalances[msg.sender] += bet;
             duels[_duelID].tokenPayout += bet;
 
             // Handle NFT transfer
@@ -928,6 +965,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         if (nishibBalances[_recipient] < pot) {
             revert InsufficientBalance({
                 sender: address(this),
+                recipient: _recipient,
                 required: pot,
                 balance: nishibBalances[_recipient]
             });
@@ -935,9 +973,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
         // Process withdrawal logic
         success = _transferToken(address(this), _recipient, pot);
-
-        // Update user staked token balance
-        nishibBalances[_recipient] -= pot;
 
         // Update Duel Status
         duels[_duelID].status = Status.PotPaid;
@@ -1115,11 +1150,11 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             // Confirm NFT ownership and approval are still good
             _confirmNFT(msg.sender, _tokenId);
 
-            // Stake NFT into contract
-            IERC721(nishibNFT).safeTransferFrom(msg.sender, address(this), _tokenId);
-            duels[_duelID].nftPayout = _tokenId;
+            // Process NFT transfer
+            _transferNFT(msg.sender, address(this), _tokenId);
 
-            emit NFTTransfer(msg.sender, address(this), _tokenId);
+            // Set DON NFT stake
+            duels[_duelID].nftPayout = _tokenId;
 
             // Set DoubleOrNothing switch to true
             duels[_duelID].DONSwitch[msg.sender] = true;
