@@ -473,7 +473,7 @@ contract NitroShibaDuel is Ownable {
     }
 
     /*//////////////////////////////////////////////////////////////
-                GENERAL INTERNAL FUNCTIONS
+                INTERNAL TRANSFER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
     // Internal token transfer logic
@@ -501,6 +501,59 @@ contract NitroShibaDuel is Ownable {
         emit TokenTransfer(_from, _to, _amount);
 
         return success;
+    }
+
+    // Internal NFT transfer logic
+    function _transferNFT(
+        address _from,
+        address _to,
+        uint256 _tokenId
+    ) internal {
+        // Confirm contract owns the NFT
+        if (IERC721(nishibNFT).ownerOf(_tokenId) != address(this)) {
+            revert NotOwner({
+                sender: _from,
+                owner: IERC721(nishibNFT).ownerOf(_tokenId),
+                tokenId: _tokenId
+            });
+        }
+
+        IERC721(nishibNFT).safeTransferFrom(_from, _to, _tokenId);
+
+        emit NFTTransfer(_from, _to, _tokenId);
+    }
+
+    // Internal token refund logic
+    function _refundTokens(uint256 _duelID) internal {
+        // Loop to process withdrawals for all potential parties
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // Retrieve refundee address and refund value
+            address refundee = duels[_duelID].addresses[i];
+            uint256 refund = duels[_duelID].bet;
+
+            // Reduce user's and duel's stored contract balance
+            nishibBalances[refundee] -= refund;
+            duels[_duelID].tokenPayout -= refund;
+
+            // Process refund
+            _transferToken(address(this), refundee, refund);
+        }
+    }
+
+    // Internal NFT refund logic
+    function _refundNFTs(uint256 _duelID) internal {
+        // Loop to process withdrawals for all potential parties
+        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
+            // Retrieve refundee address and refund value
+            address refundee = duels[_duelID].addresses[i];
+            uint256 tokenId = duels[_duelID].tokenIDs[i];
+
+            // Wipe out tokenId
+            duels[_duelID].tokenIDs[i] = 0;
+
+            // Process refund
+            _transferNFT(address(this), refundee, tokenId);
+        }
     }
 
     // Internal function to reduce loser's $NISHIB contract balance
@@ -577,6 +630,65 @@ contract NitroShibaDuel is Ownable {
         }
     }
 
+    // Internal function to process different game mode logic
+    function _executeTransfers(uint256 _duelID) internal {
+        // Retrireve duel game mode
+        Mode gameMode = duels[_duelID].mode;
+
+        // Execute logic specific to game mode
+        if (gameMode == Mode.SimpleBet ||
+            gameMode == Mode.Jackpot) { // SimpleBet and Jackpot
+                _adjustBalances(_duelID);
+        }
+        else if (gameMode == Mode.DoubleOrNothing) { // DoubleOrNothing
+            _adjustDONBalances(_duelID);
+        }
+        else if (gameMode == Mode.PVP) { // PVP
+            _adjustNFTOwnership(_duelID);
+        }
+        else if (gameMode == Mode.PVPPlus) { // PVPPlus
+            _adjustBalances(_duelID);
+            _adjustNFTOwnership(_duelID);
+        }
+        else {
+            revert InvalidMode({
+                duelID: _duelID,
+                mode: gameMode
+            });
+        }
+
+        // If no revert, announce Duel execution
+        emit DuelExecuted({
+            executor: msg.sender,
+            winner: duels[_duelID].winner,
+            duelID: _duelID
+        });
+    }
+
+    // Internal function to handle processing refunds in the event of a cancelation
+    function _executeRefunds(uint256 _duelID) internal {
+        // Retrireve duel game mode
+        Mode gameMode = duels[_duelID].mode;
+
+        // Execute logic specific to game mode
+        if (gameMode == Mode.SimpleBet ||
+            gameMode == Mode.DoubleOrNothing ||
+            gameMode == Mode.Jackpot) { // SimpleBet/DoubleOrNothing/Jackpot
+                _refundTokens(_duelID);
+        }
+        else if (gameMode == Mode.PVP) { // PVP
+            _refundNFTs(_duelID);
+        }
+        else if (gameMode == Mode.PVPPlus) { // PVPPlus
+            _refundTokens(_duelID);
+            _refundNFTs(_duelID);
+        }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                GAME MODE LOGIC
+    //////////////////////////////////////////////////////////////*/
+
     // Internal sorting logic to determine winner
     function _determineWinner(uint256 _duelID) internal view returns (address winner) {
         // Store winning index value and vrfOutput for loop iterations
@@ -597,10 +709,6 @@ contract NitroShibaDuel is Ownable {
 
         return winner;
     }
-
-    /*//////////////////////////////////////////////////////////////
-                GAME MODE LOGIC
-    //////////////////////////////////////////////////////////////*/
 
     // Internal function logic for enabling the DoubleOrNothing Mode
     function _enableDON(uint256 _duelID) internal returns (bool) {
@@ -632,44 +740,6 @@ contract NitroShibaDuel is Ownable {
             // New VRF values will be generated during salting process
             _executeDuel(_duelID);
         }
-    }
-
-
-    // Internal function to process different game mode logic
-    function _executeTransfers(uint256 _duelID) internal {
-        // Retrireve duel game mode
-        Mode gameMode = duels[_duelID].mode;
-
-        // Execute logic specific to game mode
-        if (gameMode == Mode.SimpleBet) { // SimpleBet
-            _adjustBalances(_duelID);
-        }
-        else if (gameMode == Mode.DoubleOrNothing) { // DoubleOrNothing
-            _adjustDONBalances(_duelID);
-        }
-        else if (gameMode == Mode.PVP) { // PVP
-            _adjustNFTOwnership(_duelID);
-        }
-        else if (gameMode == Mode.PVPPlus) { // PVPPlus
-            _adjustBalances(_duelID);
-            _adjustNFTOwnership(_duelID);
-        }
-        else if (gameMode == Mode.Jackpot) { // PVPPlus
-            _adjustBalances(_duelID);
-        }
-        else {
-            revert InvalidMode({
-                duelID: _duelID,
-                mode: gameMode
-            });
-        }
-
-        // If no revert, announce Duel execution
-        emit DuelExecuted({
-            executor: msg.sender,
-            winner: duels[_duelID].winner,
-            duelID: _duelID
-        });
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -759,27 +829,14 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Internal duel cancelation logic
-    function _cancelDuel(uint256 _duelID) internal returns (bool success) {
-        // Loop to process withdrawals for all potential parties
-        for (uint i = 0; i < duels[_duelID].participantCount; i++) {
-            // Retrieve refundee address and refund value
-            address refundee = duels[_duelID].addresses[i];
-            uint256 refund = duels[_duelID].bet;
-
-            // Reduce user's and duel's stored contract balance
-            nishibBalances[refundee] -= refund;
-            duels[_duelID].tokenPayout -= refund;
-
-            // Process refund
-            success = _transferToken(address(this), refundee, refund);
-        }
+    function _cancelDuel(uint256 _duelID) internal {
+        // Call asset refund logic
+        _executeRefunds(_duelID);
 
         // Alter duel struct to reflect cancelation
         duels[_duelID].status = Status.Canceled;
 
         emit DuelCanceled(msg.sender, _duelID);
-
-        return success;
     }
 
     // Internal duel join logic
@@ -899,9 +956,11 @@ contract NitroShibaDuel is Ownable {
     }
 
     // Public function allowing the initiator to cancel a duel
-    function cancelDuel(uint256 _duelID) public returns (bool success) {
+    function cancelDuel(uint256 _duelID) public {
         // Confirm Duel Status is valid for cancelation
-        if (duels[_duelID].status != Status.Initialized) {
+        if (duels[_duelID].status != Status.Initialized ||
+            (duels[_duelID].status == Status.Completed &&
+                duels[_duelID].mode == Mode.DoubleOrNothing)) {
             revert InvalidStatus({
                 duelID: _duelID,
                 current: duels[_duelID].status
@@ -918,9 +977,7 @@ contract NitroShibaDuel is Ownable {
         _confirmInitiator(_duelID);
 
         // Run internal duel cancellation logic
-        success = _cancelDuel(_duelID);
-
-        return success;
+        _cancelDuel(_duelID);
     }
 
     // Public function to allow anyone to join a duel once per wallet
