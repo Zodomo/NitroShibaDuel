@@ -141,36 +141,9 @@ contract NitroShibaDuel is Ownable {
                 IERC721Receiver
     //////////////////////////////////////////////////////////////*/
 
-    // Is this really needed? Unsure. Keeping code until I am.
-
-    /* function _checkOnERC721Received(
-        address _from,
-        address _to,
-        uint256 _tokenId,
-        bytes memory _data
-    ) private returns (bool) {
-        if (_to.isContract()) {
-            try IERC721Receiver(_to).onERC721Received(msg.sender, _from, _tokenId, _data) returns (bytes4 retval) {
-                return retval == IERC721Receiver.onERC721Received.selector;
-            } catch (bytes memory reason) {
-                if (reason.length == 0) {
-                    revert InvalidRecipient({
-                        operator: msg.sender,
-                        from: _from,
-                        tokenId: _tokenId,
-                        data: _data
-                    });
-                } else {
-                    /// @solidity memory-safe-assembly
-                    assembly {
-                        revert(add(32, reason), mload(reason))
-                    }
-                }
-            }
-        } else {
-            return true;
-        }
-    } */
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return IERC721Receiver.onERC721Received.selector;
+    }
 
     /*//////////////////////////////////////////////////////////////
                 DATA RETRIEVAL
