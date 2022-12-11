@@ -213,7 +213,17 @@ contract NitroShibaDuel is Ownable {
     // Only the contract owner can cancel an initiated jackpot
     // Since any community member can initiate a jackpot, it would be considered chaotic
     // to trust random initiators to randomly cancel high-participation jackpots
+    // NOTE: Contract owner cannot cancel jackpot if they participated in it
     function cancelJackpot_(uint256 _jackpotIndex) public onlyOwner {
+        // Loop through all duel participants trying to find contract owner address
+        for (uint i = 0; i < duels[_jackpotIndex].participantCount; i++) {
+            // If contract owner address is found, throw error
+            if (duels[_jackpotIndex].addresses[i] == msg.sender) {
+                revert ImproperJackpotCancelation({ duelID: _jackpotIndex });
+            }
+        }
+
+        // Run internal duel cancelation logic
         _cancelDuel(_jackpotIndex);
     }
 
