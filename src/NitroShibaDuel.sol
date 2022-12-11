@@ -1012,7 +1012,7 @@ contract NitroShibaDuel is Ownable {
         _joinDuel(_tokenId, _duelID);
     }
 
-    // Public function allowing anyone to execute game logic and engage VRF logic
+    // Public function allowing any participant to execute game logic and engage VRF logic
     function executeDuel(uint256 _duelID) public returns (address winner) {
         // Confirm Duel Status is not Completed
         if (duels[_duelID].status == Status.Completed) {
@@ -1026,6 +1026,9 @@ contract NitroShibaDuel is Ownable {
         if (duels[_duelID].participantCount > 1) {
             revert NotEnoughParticipants({ duelID: _duelID });
         }
+
+        // Restrict duel execution to participants to prevent MEV abuse
+        _confirmParticipant(msg.sender, _duelID);
 
         // Jackpot mode is the only mode that may not have just two participants
         // If in Jackpot mode, confirm deadline hasn't been reached
