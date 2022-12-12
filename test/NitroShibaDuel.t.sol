@@ -3,7 +3,6 @@ pragma solidity ^0.8.17;
 
 import {DSTestPlus} from "solmate/test/utils/DSTestPlus.sol";
 import {DSInvariantTest} from "solmate/test/utils/DSInvariantTest.sol";
-import {console} from "forge-std/console.sol";
 
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 import {MockERC721} from "solmate/test/utils/mocks/MockERC721.sol";
@@ -112,11 +111,56 @@ contract NitroShibaDuelTest is DSTestPlus {
 
     
     // Test initiateDuel()
-    function testInitiateUninitiatedDuel() public {
+    function testInitiateOneUninitiatedDuel() public {
         // Initiate duel as 0xABCD
         hevm.prank(address(0xABCD));
-        uint256 duel = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
-        require(duel == 1, "duelID_INCORRECT");
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+
+        // Get Duel data
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(1);
+
+        require(duelID == 1, "duelID_INCORRECT");
+        require(bet == etherToWei(10), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.Initialized, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt == bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0), "winner_INCORRECT");
+        require(participantCount == 1, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(10), "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
+    }
+
+    // Test two concurrent calls to initiateDuel()
+    function testInitiateTwoUninitiatedDuels() public {
+        // Initiate duels as 0xABCD
+        hevm.startPrank(address(0xABCD));
+        game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+        uint256 duelID = game.initiateDuel(1, etherToWei(20), NitroShibaDuel.Mode.SimpleBet);
+        hevm.stopPrank();
+
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(duelID == 2, "duelID_INCORRECT");
+        require(bet == etherToWei(20), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.Initialized, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt == bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0), "winner_INCORRECT");
+        require(participantCount == 1, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
     }
 
     // Test cancelDuel() immediately after initiation

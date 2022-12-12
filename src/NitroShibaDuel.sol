@@ -28,6 +28,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     error NotWinner(address sender, address winner, uint256 duelID);
     error NotLoser(address sender, uint256 duelID);
     error NotEnoughParticipants(uint256 duelID);
+    error NoParticipants(uint256 duelID);
     error NoWinner(uint256 duelID);
     error NoSalt(uint256 duelID);
 
@@ -162,6 +163,24 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     // Get total payout
     function getTotalPayout() external view returns (uint256) {
         return Counters.current(totalPayout);
+    }
+
+    // Get Duel data
+    function getDuelData(uint256 _duelID) external view returns (
+        uint256 bet, Mode mode, Status status,
+        uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+        address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+    ) {
+        bet = duels[_duelID].bet;
+        mode = duels[_duelID].mode;
+        status = duels[_duelID].status;
+        deadline = duels[_duelID].deadline;
+        vrfSalt = duels[_duelID].vrfSalt;
+        vrfDONSalt = duels[_duelID].vrfDONSalt;
+        winner = duels[_duelID].winner;
+        participantCount = duels[_duelID].participantCount;
+        tokenPayout = duels[_duelID].tokenPayout;
+        nftPayout = duels[_duelID].nftPayout;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -514,6 +533,15 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // Process contract balance changes
         // Withdrawal
         if (_from == address(this)) {
+            // Throw error if _from has insufficient contract balance
+            if (nishibBalances[_to] < _amount) {
+                revert InsufficientBalance({
+                    sender: _from,
+                    recipient: _to,
+                    required: _amount,
+                    balance: nishibBalances[_to]
+                });
+            }
             // Reduce contract balance for recipient
             nishibBalances[_to] -= _amount;
         }
@@ -555,8 +583,19 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             address refundee = duels[_duelID].addresses[i];
             uint256 refund = duels[_duelID].bet;
 
-            // Deduct tokens from totalPayout
-            duels[_duelID].tokenPayout -= refund;
+            // Throw error if tokenPayout is empty
+            if (duels[_duelID].tokenPayout < refund) {
+                revert InsufficientBalance({
+                    sender: address(this),
+                    recipient: refundee,
+                    required: refund,
+                    balance: duels[_duelID].tokenPayout
+                });
+            }
+            // Otherwise, deduct user token refund from totalPayout
+            else {
+                duels[_duelID].tokenPayout -= refund;
+            }
 
             // Process refund
             _transferToken(address(this), refundee, refund);
@@ -1021,6 +1060,31 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             });
         } else if (duels[_duelID].mode == Mode.Jackpot) {
             revert ImproperJackpotCancelation({ duelID: _duelID });
+        }
+
+        // Confirm participantCount is > 0 to prevent underflow
+        if (duels[_duelID].participantCount < 1) {
+            revert NoParticipants({ duelID: _duelID });
+        }
+
+        // Confirm tokenPayout is enough to cover all participants
+        if (duels[_duelID].tokenPayout < (duels[_duelID].participantCount * duels[_duelID].bet)) {
+            revert InsufficientBalance({
+                sender: address(this),
+                recipient: address(0xE),
+                required: duels[_duelID].participantCount * duels[_duelID].bet,
+                balance: duels[_duelID].tokenPayout
+            });
+        }
+
+        // Confirm contract has tokenPayout balance
+        if (IERC20(nishibToken).balanceOf(address(this)) < duels[_duelID].tokenPayout) {
+            revert InsufficientBalance({
+                sender: address(this),
+                recipient: address(0xF),
+                required: duels[_duelID].tokenPayout,
+                balance: IERC20(nishibToken).balanceOf(address(this))
+            });
         }
 
         // Prevent cancelation of duel if expiry deadline is not reached
