@@ -172,6 +172,8 @@ cd NitroShibaDuel
 forge install
 
 forge build
+
+forge test
 ```
 
 ## Authors
