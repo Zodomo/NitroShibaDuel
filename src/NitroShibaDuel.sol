@@ -520,8 +520,14 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             return success;
         }
 
+        // Use transfer if contract is paying out, otherwise transferFrom
+        if (_from == address(this)) {
+            success = IERC20(nishibToken).transfer(_to, _amount);
+        } else {
+            success = IERC20(nishibToken).transferFrom(_from, _to, _amount);
+        }
+
         // Revert if transfer fails
-        success = IERC20(nishibToken).transferFrom(_from, _to, _amount);
         if (!success) {
             revert TransferFailed({
                 sender: _from,
@@ -662,12 +668,12 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             nishibBalances[winner] += pot;
             
             // Return staked NFT
-            IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+            _transferNFT(address(this), winner, tokenId);
             // Clear staking record
             duels[_duelID].nftPayout = 0;
         } else {
             // If the winner was the previous winner, transfer the loser's NFT to them
-            IERC721(nishibNFT).safeTransferFrom(address(this), winner, tokenId);
+            _transferNFT(address(this), winner, tokenId);
             // Clear staking record
             duels[_duelID].nftPayout = 0;
         }
