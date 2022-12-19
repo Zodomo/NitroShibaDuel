@@ -22,6 +22,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     //////////////////////////////////////////////////////////////*/
 
     error NotOwner(address sender, address owner, uint256 tokenId);
+    error NotAvailable(uint256 tokenId);
     error NotApproved(address sender, address tokenAddress, uint256 amount);
     error NotInitiator(address sender, address initiator, uint256 duelID);
     error NotParticipant(address candidate, uint256 duelID);
@@ -87,6 +88,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
     // Stores user $NISHIB balances for contract logic
     mapping(address => uint256) public nishibBalances;
+    mapping(uint256 => bool) public isStaked;
 
     // Mode enum determines duel mode
     enum Mode {
@@ -181,6 +183,13 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         participantCount = duels[_duelID].participantCount;
         tokenPayout = duels[_duelID].tokenPayout;
         nftPayout = duels[_duelID].nftPayout;
+    }
+
+    // Get Duel participant data
+    function getDuelParticipant(uint256 _duelID, uint256 _participant) external view returns (address participant, uint256 tokenId) {
+        participant = duels[_duelID].addresses[_participant];
+        tokenId = duels[_duelID].tokenIDs[_participant];
+        return (participant, tokenId);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -284,6 +293,14 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
     }
 
+    // Confirm NFT is available (not staked in another PVP mode)
+    function _confirmAvailable(uint256 _tokenId) internal view {
+        // Ensure NFT isn't staked elsewhere
+        if (isStaked[_tokenId] == true) {
+            revert NotAvailable({ tokenId: _tokenId });
+        }
+    }
+
     // Confirm duel is not expired
     function _confirmDeadline(uint256 _duelID) internal view {
         // Check if duel deadline hasn't been reached yet
@@ -308,27 +325,19 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
     }
 
-    // Confirm if caller is a duel participant
-    function _confirmParticipant(address _candidate, uint256 _duelID) internal view returns (uint256 tokenId) {
-        // Store whether _candidate is found to trip error condition if necessary
-        bool found;
-
+    // Confirm if caller is a duel participant, return tokenId and position index if true
+    function _confirmParticipant(address _candidate, uint256 _duelID) internal view returns (uint256 tokenId, uint256 index) {
         // Loop through all duel participants trying to find _candidate address
         for (uint i = 0; i < duels[_duelID].participantCount; i++) {
-            // If _candidate found, return their Duels data index value
+            // If _candidate found, return their NFT tokenId and Duel index
             if (duels[_duelID].addresses[i] == _candidate) {
-                found = true;
-                return i; // Return will end loop
+                tokenId = duels[_duelID].tokenIDs[i];
+                index = i;
+                return (tokenId, index);
             }
         }
 
-        // Throw error if not found
-        if (!found) {
-            revert NotParticipant({
-                candidate: _candidate,
-                duelID: _duelID
-            });
-        }
+        return (0, 0);
     }
 
     // Confirm the caller is a valid participant but lost
@@ -377,7 +386,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     // Generate duelee's initial VRF hash
     function _vrfGenerateInput(address _duelee, uint256 _duelID) internal view returns (bytes32 vrfHash) {
         // Find _duelee's Duel data index hash, if they're a valid duelee
-        uint256 index = _confirmParticipant(_duelee, _duelID);
+        (, uint256 index) = _confirmParticipant(_duelee, _duelID);
 
         // Generate initial VRF hash with Duel data and mined block data
         // Multiple parameters is expensive but makes MEV nearly impossible
@@ -820,6 +829,9 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         uint256 _bet,
         Mode _mode
     ) internal returns (uint256 _duelID) {
+        // Confirm NFT isn't already staked
+        _confirmAvailable(_tokenId);
+
         // Block DoubleOrNothing as it more of a modifier than a mode
         if (_mode == Mode.DoubleOrNothing) {
             revert InvalidMode({
@@ -949,6 +961,9 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
         // PVP execution logic
         else if (mode == Mode.PVP) {
+            // Confirm NFT isn't already staked
+            _confirmAvailable(_tokenId);
+
             // Handle NFT transfer
             _transferNFT(msg.sender, address(this), _tokenId);
 
@@ -957,6 +972,9 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
         // PVPPlus execution logic
         else if (mode == Mode.PVPPlus) {
+            // Confirm NFT isn't already staked
+            _confirmAvailable(_tokenId);
+
             // Handle token transfer and related Duel data
             _transferToken(msg.sender, address(this), bet);
             duels[_duelID].tokenPayout += bet;
@@ -1026,9 +1044,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
         // Increment total payout via pot
         Counters.increment(totalPayout);
-
-        // Adjust Duel tokenPayout to avoid double withdraws
-        duels[_duelID].tokenPayout -= pot;
 
         return success;
     }
@@ -1128,12 +1143,13 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
 
         // Require prior initialization by checking participants
-        if (duels[_duelID].participantCount > 0) {
+        if (duels[_duelID].participantCount == 0) {
             revert NotEnoughParticipants({ duelID: _duelID });
         }
 
         // Prevent double joins
-        if (_confirmParticipant(msg.sender, _duelID) >= 0) {
+        (uint256 tokenId, ) = _confirmParticipant(msg.sender, _duelID);
+        if (tokenId != 0) {
             revert AlreadyJoined({ duelID: _duelID });
         }
 
@@ -1152,12 +1168,18 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
 
         // Require at least two participants as that is minimum edge case
-        if (duels[_duelID].participantCount > 1) {
+        if (duels[_duelID].participantCount < 2) {
             revert NotEnoughParticipants({ duelID: _duelID });
         }
 
         // Restrict duel execution to participants to prevent MEV abuse
-        _confirmParticipant(msg.sender, _duelID);
+        (uint256 tokenId, ) = _confirmParticipant(msg.sender, _duelID);
+        if (tokenId == 0) {
+            revert NotParticipant({
+                candidate: msg.sender,
+                duelID: _duelID
+            });
+        }
 
         // Jackpot mode is the only mode that may not have just two participants
         // If in Jackpot mode, confirm deadline hasn't been reached

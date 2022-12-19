@@ -111,12 +111,12 @@ contract NitroShibaDuelTest is DSTestPlus {
 
     
     // Test initiateDuel()
-    function testInitiateOneUninitiatedDuel() public {
+    function testInitiateDuel() public {
         // Initiate duel as 0xABCD
         hevm.prank(address(0xABCD));
         uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
 
-        // Get Duel data
+        // Standard duel data checks
         (
             uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
             uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
@@ -134,16 +134,27 @@ contract NitroShibaDuelTest is DSTestPlus {
         require(participantCount == 1, "participantCount_INCORRECT");
         require(tokenPayout == etherToWei(10), "tokenPayout_INCORRECT");
         require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == etherToWei(10), "balanceOf_INCORRECT");
+        require(game.nishibBalances(address(0xABCD)) == etherToWei(10), "nishibBalances_INCORRECT");
     }
 
     // Test two concurrent calls to initiateDuel()
-    function testInitiateTwoUninitiatedDuels() public {
+    function testInitiateTwoDuels() public {
         // Initiate duels as 0xABCD
         hevm.startPrank(address(0xABCD));
         game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
         uint256 duelID = game.initiateDuel(1, etherToWei(20), NitroShibaDuel.Mode.SimpleBet);
         hevm.stopPrank();
 
+        // Standard duel data checks
         (
             uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
             uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
@@ -161,14 +172,264 @@ contract NitroShibaDuelTest is DSTestPlus {
         require(participantCount == 1, "participantCount_INCORRECT");
         require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
         require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == etherToWei(30), "balanceOf_INCORRECT");
+        require(game.nishibBalances(address(0xABCD)) == etherToWei(30), "nishibBalances_INCORRECT");
     }
 
     // Test cancelDuel() immediately after initiation
     function testCancelInitiatedDuel() public {
         // Initiate duel as 0xABCD
         hevm.startPrank(address(0xABCD));
-        game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
-        game.cancelDuel(1);
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+        game.cancelDuel(duelID);
         hevm.stopPrank();
+
+        // Standard duel data checks
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(duelID == 1, "duelID_INCORRECT");
+        require(bet == etherToWei(10), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.Canceled, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt == bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0), "winner_INCORRECT");
+        require(participantCount == 1, "participantCount_INCORRECT");
+        require(tokenPayout == 0, "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == 0, "balanceOf_INCORRECT");
+        require(token.balanceOf(address(0xABCD)) == etherToWei(100), "REFUND_ERROR");
+        require(game.nishibBalances(address(0xABCD)) == 0, "nishibBalances_INCORRECT");
+    }
+
+    // Test joining a duel
+    function testJoinInitiatedDuel() public {
+        // Initiate duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+
+        // Join duel as 0xBEEF
+        hevm.prank(address(0xBEEF));
+        game.joinDuel(2, duelID);
+
+        // Standard duel data checks
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(status == NitroShibaDuel.Status.Initialized, "status_INCORRECT");
+        require(participantCount == 2, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        (participant, tokenId) = game.getDuelParticipant(duelID, 1);
+
+        require(participant == address(0xBEEF), "address_ERROR");
+        require(tokenId == 2, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == etherToWei(20), "balanceOf_INCORRECT");
+        require(game.nishibBalances(address(0xABCD)) == etherToWei(10), "nishibBalances_INCORRECT");
+        require(game.nishibBalances(address(0xBEEF)) == etherToWei(10), "nishibBalances_INCORRECT");
+    }
+
+    // Test executing a duel
+    function testExecuteDuelAsInitiator() public {
+        // Initiate duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+
+        // Join duel as 0xBEEF
+        hevm.prank(address(0xBEEF));
+        game.joinDuel(2, duelID);
+
+        // Execute duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        game.executeDuel(duelID);
+
+        // Standard duel data checks
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(duelID == 1, "duelID_INCORRECT");
+        require(bet == etherToWei(10), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.Completed, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt != bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0xABCD) || winner == address(0xBEEF), "winner_INCORRECT");
+        require(participantCount == 2, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        (participant, tokenId) = game.getDuelParticipant(duelID, 1);
+
+        require(participant == address(0xBEEF), "address_ERROR");
+        require(tokenId == 2, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == etherToWei(20), "balanceOf_INCORRECT");
+        if (winner == address(0xABCD)) {
+            require(game.nishibBalances(address(0xABCD)) == etherToWei(20), "nishibBalances_INCORRECT");
+            require(game.nishibBalances(address(0xBEEF)) == 0, "nishibBalances_INCORRECT");
+        } else {
+            require(game.nishibBalances(address(0xBEEF)) == etherToWei(20), "nishibBalances_INCORRECT");
+            require(game.nishibBalances(address(0xABCD)) == 0, "nishibBalances_INCORRECT");
+        }
+    }
+
+    // Test executing a duel
+    function testExecuteDuelAsParticipant() public {
+        // Initiate duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+
+        // Join duel as 0xBEEF
+        hevm.prank(address(0xBEEF));
+        game.joinDuel(2, duelID);
+
+        // Execute duel as 0xBEEF
+        hevm.prank(address(0xBEEF));
+        game.executeDuel(duelID);
+
+        // Standard duel data checks
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(duelID == 1, "duelID_INCORRECT");
+        require(bet == etherToWei(10), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.Completed, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt != bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0xABCD) || winner == address(0xBEEF), "winner_INCORRECT");
+        require(participantCount == 2, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        (participant, tokenId) = game.getDuelParticipant(duelID, 1);
+
+        require(participant == address(0xBEEF), "address_ERROR");
+        require(tokenId == 2, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == etherToWei(20), "balanceOf_INCORRECT");
+        if (winner == address(0xABCD)) {
+            require(game.nishibBalances(address(0xABCD)) == etherToWei(20), "nishibBalances_INCORRECT");
+            require(game.nishibBalances(address(0xBEEF)) == 0, "nishibBalances_INCORRECT");
+        } else {
+            require(game.nishibBalances(address(0xBEEF)) == etherToWei(20), "nishibBalances_INCORRECT");
+            require(game.nishibBalances(address(0xABCD)) == 0, "nishibBalances_INCORRECT");
+        }
+    }
+
+    // Test if winner can withdraw duel winnings
+    function testWithdrawDuel() public {
+        // Initiate duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        uint256 duelID = game.initiateDuel(1, etherToWei(10), NitroShibaDuel.Mode.SimpleBet);
+
+        // Join duel as 0xBEEF
+        hevm.prank(address(0xBEEF));
+        game.joinDuel(2, duelID);
+
+        // Execute duel as 0xABCD
+        hevm.prank(address(0xABCD));
+        game.executeDuel(duelID);
+
+        // Have winner withdrfaw
+        (,,,,,,address duelWinner,,,) = game.getDuelData(duelID);
+        hevm.prank(duelWinner);
+        game.withdrawDuel(duelID);
+
+        // Standard duel data checks
+        (
+            uint256 bet, NitroShibaDuel.Mode mode, NitroShibaDuel.Status status,
+            uint256 deadline, bytes32 vrfSalt, bytes32 vrfDONSalt,
+            address winner, uint256 participantCount, uint256 tokenPayout, uint256 nftPayout
+        ) = game.getDuelData(duelID);
+
+        require(duelID == 1, "duelID_INCORRECT");
+        require(bet == etherToWei(10), "bet_INCORRECT");
+        require(mode == NitroShibaDuel.Mode.SimpleBet, "mode_INCORRECT");
+        require(status == NitroShibaDuel.Status.PotPaid, "status_INCORRECT");
+        require(deadline > 0, "deadline_INCORRECT");
+        require(vrfSalt != bytes32(0), "vrfSalt_INCORRECT");
+        require(vrfDONSalt == bytes32(0), "vrfDONSalt_INCORRECT");
+        require(winner == address(0xABCD) || winner == address(0xBEEF), "winner_INCORRECT");
+        require(participantCount == 2, "participantCount_INCORRECT");
+        require(tokenPayout == etherToWei(20), "tokenPayout_INCORRECT");
+        require(nftPayout == 0, "nftPayout_INCORRECT");
+
+        // Participant data checks
+        (address participant, uint256 tokenId) = game.getDuelParticipant(duelID, 0);
+
+        require(participant == address(0xABCD), "address_ERROR");
+        require(tokenId == 1, "tokenId_ERROR");
+
+        (participant, tokenId) = game.getDuelParticipant(duelID, 1);
+
+        require(participant == address(0xBEEF), "address_ERROR");
+        require(tokenId == 2, "tokenId_ERROR");
+
+        // Contract state checks
+        require(token.balanceOf(address(game)) == 0, "balanceOf_INCORRECT");
+        if (winner == address(0xABCD)) {
+            require(token.balanceOf(address(0xABCD)) == etherToWei(110), "balanceOf_INCORRECT");
+            require(token.balanceOf(address(0xBEEF)) == etherToWei(90), "balanceOf_INCORRECT");
+        } else {
+            require(token.balanceOf(address(0xABCD)) == etherToWei(90), "balanceOf_INCORRECT");
+            require(token.balanceOf(address(0xBEEF)) == etherToWei(110), "balanceOf_INCORRECT");
+        }
+        require(game.nishibBalances(address(0xABCD)) == 0, "nishibBalances_INCORRECT");
+        require(game.nishibBalances(address(0xBEEF)) == 0, "nishibBalances_INCORRECT");
     }
 }
