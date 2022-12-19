@@ -71,7 +71,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     address nishibNFT; // 0x74B8e48823658af4296814a8eC6baf271BcFa1e0
 
     // Incremential duel count value is used as duel identifier
-    Counters.Counter public duelCount;
+    Counters.Counter public duelIndex;
     // Incremental $NISHIB payout total
     Counters.Counter public totalPayout;
     // Current duels index for active jackpot
@@ -142,7 +142,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         uint256 _jackpotExpiry
     ) {
         // Start duels index at 1 because we don't want default values in execution
-        Counters.increment(duelCount);
+        Counters.increment(duelIndex);
 
         nishibToken = _nishibToken; // 0x4DAD357726b41bb8932764340ee9108cC5AD33a0
         nishibNFT = _nishibNFT; // 0x74B8e48823658af4296814a8eC6baf271BcFa1e0
@@ -158,8 +158,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     //////////////////////////////////////////////////////////////*/
 
     // Get total duel count
-    function getDuelCount() external view returns (uint256) {
-        return Counters.current(duelCount);
+    function getduelIndex() external view returns (uint256) {
+        return Counters.current(duelIndex);
     }
 
     // Get total payout
@@ -186,10 +186,13 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     }
 
     // Get Duel participant data
-    function getDuelParticipant(uint256 _duelID, uint256 _participant) external view returns (address participant, uint256 tokenId) {
+    function getDuelParticipant(uint256 _duelID, uint256 _participant) 
+        external view returns (address participant, uint256 tokenId, bytes32 vrfHash)
+    {
         participant = duels[_duelID].addresses[_participant];
         tokenId = duels[_duelID].tokenIDs[_participant];
-        return (participant, tokenId);
+        vrfHash = duels[_duelID].vrfInput[_participant];
+        return (participant, tokenId, vrfHash);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -358,25 +361,20 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
     }
     
     // Confirm the caller is the duel winner
-    function _confirmWinner(uint256 _duelID) internal view returns (address winner) {
+    function _confirmWinner(uint256 _duelID) internal view returns (bool) {
         // Retrieve winner
-        winner = duels[_duelID].winner;
+        address winner = duels[_duelID].winner;
 
         // Confirm duel has a winner
         if (winner == address(0x0)) {
             revert NoWinner({ duelID: _duelID });
         }
 
-        // Confirm winner is msg.sender
-        if (duels[_duelID].winner != msg.sender) {
-            revert NotWinner({
-                sender: msg.sender,
-                winner: duels[_duelID].winner,
-                duelID: _duelID
-            });
+        if (winner == msg.sender) {
+            return true;
         }
 
-        return winner;
+        return false;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -428,6 +426,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
     // Utilize vrfOutput as new input for DoubleOrNothing resalting
     function _vrfGenerateDONSalt(uint256 _duelID) internal returns (bytes32 vrfDONSalt) {
+        // Iteratively regenerate vrfDONSalt
         for (uint i = 0; i < duels[_duelID].participantCount; i++) {
             vrfDONSalt = keccak256(abi.encodePacked(
                 vrfDONSalt,
@@ -439,6 +438,9 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
                 block.difficulty
             ));
         }
+
+        // Store generated vrfDONSalt
+        duels[_duelID].vrfDONSalt = vrfDONSalt;
 
         emit DuelSaltGenerated(_duelID, vrfDONSalt);
 
@@ -576,14 +578,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         address _to,
         uint256 _tokenId
     ) internal {
-        // Confirm contract owns the NFT
-        if (IERC721(nishibNFT).ownerOf(_tokenId) != address(this)) {
-            revert NotOwner({
-                sender: _from,
-                owner: IERC721(nishibNFT).ownerOf(_tokenId),
-                tokenId: _tokenId
-            });
-        }
+        _confirmNFT(_from, _tokenId);
 
         IERC721(nishibNFT).safeTransferFrom(_from, _to, _tokenId);
 
@@ -683,8 +678,6 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         } else {
             // If the winner was the previous winner, transfer the loser's NFT to them
             _transferNFT(address(this), winner, tokenId);
-            // Clear staking record
-            duels[_duelID].nftPayout = 0;
         }
     }
 
@@ -835,7 +828,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // Block DoubleOrNothing as it more of a modifier than a mode
         if (_mode == Mode.DoubleOrNothing) {
             revert InvalidMode({
-                duelID: Counters.current(duelCount),
+                duelID: Counters.current(duelIndex),
                 mode: _mode
             });
         }
@@ -864,7 +857,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
 
         // Grab current duelID
-        _duelID = Counters.current(duelCount);
+        _duelID = Counters.current(duelIndex);
 
         // Confirm duel has not been initialized
         if (duels[_duelID].status != Status.Pending) {
@@ -908,8 +901,8 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         // Generate initial VRF hash
         duels[_duelID].vrfInput.push(_vrfGenerateInput(_initializer, _duelID));
 
-        // Increment duelCount
-        Counters.increment(duelCount);
+        // Increment duelIndex
+        Counters.increment(duelIndex);
 
         emit DuelInitiated(_initializer, _duelID);
 
@@ -1222,7 +1215,7 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
         }
 
         // Require only two participants
-        if (duels[_duelID].participantCount > 2) {
+        if (duels[_duelID].participantCount != 2) {
             revert TooManyParticipants({
                 duelID: _duelID,
                 required: 2,
@@ -1232,15 +1225,12 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
 
         // If Allow only winner and loser to run logic
         // If not winner, then loser only
-        if (_confirmWinner(_duelID) == msg.sender) {
+        if (_confirmWinner(_duelID)) {
             // Set DoubleOrNothing switch to true
             duels[_duelID].DONSwitch[msg.sender] = true;
         } else {
             // Non losers will experience an error here
             _confirmLoser(_duelID);
-
-            // Confirm NFT ownership and approval are still good
-            _confirmNFT(msg.sender, _tokenId);
 
             // Process NFT transfer
             _transferNFT(msg.sender, address(this), _tokenId);
@@ -1268,10 +1258,10 @@ contract NitroShibaDuel is Ownable, ERC721Holder {
             });
         }
 
-        // Confirm sender is duel winner
-        address winner = _confirmWinner(_duelID);
-
-        success = _withdrawDuel(_duelID, winner);
+        // Confirm sender is duel winner before processing withdraw logic
+        if (_confirmWinner(_duelID)) {
+            success = _withdrawDuel(_duelID, msg.sender);
+        }
 
         return success;
     }
